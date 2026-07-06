@@ -1,0 +1,144 @@
+/* ===================================================== Floating bubble ==== */
+:root {
+  --accent: #7c5cff;
+  --accent-2: #4dc9ff;
+  --danger: #ff4d5e;
+  --bg: rgba(17, 18, 26, 0.96);
+  --stroke: rgba(255, 255, 255, 0.1);
+  --text: #eceaf6;
+  --text-dim: #9a97ad;
+  --head: 76px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  width: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  color: var(--text);
+  user-select: none;
+}
+
+/* ----------------------------------------------------- Collapsed head ---- */
+#head {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: calc(var(--head) - 12px);
+  height: calc(var(--head) - 12px);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: var(--bg);
+  border: 1px solid var(--stroke);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5);
+  -webkit-app-region: drag;
+  transition: transform 0.14s ease;
+}
+#head:hover { transform: scale(1.06); }
+#head:active { transform: scale(0.97); }
+body:not(.collapsed) #head { display: none; }
+
+#head-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 24px;
+  pointer-events: none;
+}
+#head-icon img { width: 34px; height: 34px; border-radius: 8px; }
+
+#head.pulse { animation: pulse 1.1s ease-out 3; }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 77, 94, 0.7); }
+  70%  { box-shadow: 0 0 0 16px rgba(255, 77, 94, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 77, 94, 0); }
+}
+
+.badge {
+  position: absolute;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #14151f;
+  pointer-events: none;
+}
+.badge[hidden] { display: none; }
+#head-badge { top: -2px; right: -2px; }
+
+/* ------------------------------------------------------ Expanded card ---- */
+#card {
+  position: absolute;
+  inset: 6px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 14px 50px rgba(0, 0, 0, 0.6);
+}
+body.collapsed #card { display: none; }
+
+#bar {
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 13px;
+  border-bottom: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.03);
+  -webkit-app-region: drag;
+}
+#bar button { -webkit-app-region: no-drag; }
+
+#bar-title { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 14px; min-width: 0; }
+#bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bar-icon { display: flex; }
+#bar-icon img { width: 18px; height: 18px; border-radius: 5px; }
+
+#bar-actions { display: flex; gap: 2px; }
+.ib {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.ib:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.ib.danger:hover { color: var(--danger); background: rgba(255, 77, 94, 0.12); }
+.ib svg { width: 16px; height: 16px; fill: currentColor; }
+
+#host { flex: 1; position: relative; min-height: 0; }
+#host webview { position: absolute; inset: 0; width: 100%; height: 100%; background: #fff; }
+
+/* thin edge grips so the frameless window is easy to resize */
+.grip { position: absolute; -webkit-app-region: no-drag; }
+#grip-l { left: 0; top: 46px; bottom: 8px; width: 5px; cursor: ew-resize; }
+#grip-r { right: 0; top: 46px; bottom: 8px; width: 5px; cursor: ew-resize; }
+#grip-b { left: 8px; right: 8px; bottom: 0; height: 5px; cursor: ns-resize; }

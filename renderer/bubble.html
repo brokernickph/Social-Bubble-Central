@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:;" />
+  <title>Bubbly bubble</title>
+  <link rel="stylesheet" href="bubble.css" />
+</head>
+<body class="collapsed">
+  <!-- Collapsed chat-head: a draggable floating circle -->
+  <div id="head" title="Drag to move · click to open">
+    <div id="head-icon"></div>
+    <span id="head-badge" class="badge" hidden></span>
+  </div>
+
+  <!-- Expanded compact chat panel -->
+  <div id="card">
+    <header id="bar">
+      <div id="bar-title">
+        <span id="bar-icon"></span>
+        <span id="bar-name">Chat</span>
+      </div>
+      <div id="bar-actions">
+        <button class="ib" id="btn-reload" title="Reload"></button>
+        <button class="ib" id="btn-min"    title="Collapse to bubble"></button>
+        <button class="ib" id="btn-close"  title="Close (return to rail)"></button>
+      </div>
+    </header>
+    <div id="host"><!-- webview injected --></div>
+    <div id="grip-l" class="grip"></div>
+    <div id="grip-r" class="grip"></div>
+    <div id="grip-b" class="grip"></div>
+  </div>
+
+  <script src="catalog.js"></script>
+  <script src="bubble.js"></script>
+</body>
+</html>

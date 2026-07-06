@@ -1,0 +1,56 @@
+{
+  "name": "bubbly",
+  "version": "1.0.0",
+  "description": "Edge-docked floating messenger hub — all your chats in one quiet bubble rail.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node tools/make-icon.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "keywords": ["messenger", "chat", "dock", "electron"],
+  "author": "SPEEED",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.speeed.bubbly",
+    "productName": "Bubbly",
+    "copyright": "Copyright © 2026 SPEEED",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "bubble-preload.js",
+      "renderer/**/*",
+      "!tools/**/*",
+      "!dist/**/*"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Bubbly",
+      "uninstallDisplayName": "Bubbly"
+    },
+    "portable": {
+      "artifactName": "Bubbly-${version}-portable.exe"
+    }
+  }
+}
