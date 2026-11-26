@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('bubbly', {
   setMode: (mode) => ipcRenderer.invoke('mode:set', mode),
   setRailSize: (size) => ipcRenderer.send('rail:size', size),
   hideWindow: () => ipcRenderer.send('window:hide'),
+  showWindow: () => ipcRenderer.send('window:show'),
   updateUnread: (payload) => ipcRenderer.send('unread:update', payload),
   openExternal: (url) => ipcRenderer.send('open-external', url),
   bubbleMenu: (info) => ipcRenderer.invoke('bubble-menu', info),

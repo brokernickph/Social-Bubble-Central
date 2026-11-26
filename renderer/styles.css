@@ -492,6 +492,21 @@ button.primary.big { padding: 13px 34px; font-size: 15px; border-radius: 14px; }
   transition: left 0.18s ease;
 }
 .toggle.on { background: var(--accent); }
+
+.hotkey-btn {
+  min-width: 120px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  background: var(--bg-softer);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.hotkey-btn.recording { border-color: var(--accent); color: var(--accent); }
+.row label small.warn { color: #ff4d5e; }
 .toggle.on::after { left: 21px; }
 
 .svc-row {

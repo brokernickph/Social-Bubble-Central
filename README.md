@@ -12,7 +12,7 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 - **Ghost mode** — Bubbly hides completely and slides back in when a new message arrives. Bring it back anytime with `Ctrl+Shift+B` or the tray icon. Toggle from the rail (ghost button), the tray menu, or Settings.
 - **Real logins, kept private** — every service is the real web app in its own isolated, persistent session. Log in once; sessions survive restarts. Two accounts of the same service work fine (add it twice).
 - **Unread badges** — page titles and per-service DOM probes feed unread counts to bubble badges and the tray tooltip. New messages pulse the bubble and reveal the window in ghost mode.
-- **Notifications** — services can fire native Windows notifications (grant permission inside each service).
+- **Notifications** — services can fire native Windows notifications (grant permission inside each service). Clicking one brings Bubbly out and opens that chat (or expands its floating bubble). Notifications a site sends from a service worker aren't covered.
 - **Mute per service** — right-click a bubble → mute; muted services never pulse, reveal, or count toward the total.
 - **Drag to reorder** bubbles; right-click for reload / open-in-browser / remove.
 - **OAuth-friendly** — "Continue with Google/Facebook/Apple" popups open as proper windows so SSO logins complete in-app; all other external links open in your default browser.
@@ -22,7 +22,7 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+Shift+B` | Show / hide Bubbly (global) |
+| `Ctrl+Shift+B` | Show / hide Bubbly (global). Change it in Settings → System; if another app already owns it, Bubbly warns you and keeps your previous shortcut. |
 | `Esc` | Collapse the panel |
 | `Ctrl` `+` / `-` / `0` | Zoom the active service (works while typing in a chat; remembered per service; `0` resets to the service's default fit) |
 
@@ -32,6 +32,14 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 npm install
 npm start
 ```
+
+## Tests
+
+```
+npm test
+```
+
+Unit tests (Node's built-in runner) cover unread-title parsing, the service catalog, zoom steps and shortcut recording.
 
 ## Build a native Windows app
 

@@ -104,7 +104,7 @@
               <div class="row toggle-row">
                 <label>Ghost mode
                   <small>Hide completely until a message arrives — bring it back anytime with
-                  <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> or the tray icon</small>
+                  <kbd class="hotkey-label">Ctrl+Shift+B</kbd> or the tray icon</small>
                 </label>
                 <button class="toggle" id="tgl-ghost"></button>
               </div>
@@ -118,6 +118,13 @@
 
             <div class="group">
               <h3>System</h3>
+              <div class="row">
+                <label>Show / hide shortcut
+                  <small>Works from anywhere. Click, then press a new combination (Esc cancels).</small>
+                  <small id="hotkey-warn" class="warn" hidden>This shortcut is taken by another app — pick a different one.</small>
+                </label>
+                <button class="hotkey-btn" id="btn-hotkey"></button>
+              </div>
               <div class="row toggle-row">
                 <label>Launch at startup</label>
                 <button class="toggle" id="tgl-startup"></button>
@@ -136,7 +143,7 @@
               <div id="settings-services"></div>
             </div>
 
-            <p class="hint center">Bubbly v1.0 — <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> show/hide · drag bubbles to reorder</p>
+            <p class="hint center">Bubbly v1.0 — <kbd class="hotkey-label">Ctrl+Shift+B</kbd> show/hide · drag bubbles to reorder</p>
           </div>
         </section>
       </div>
@@ -162,6 +169,7 @@
   <div id="toast" hidden></div>
 
   <script src="catalog.js"></script>
+  <script src="hotkey.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

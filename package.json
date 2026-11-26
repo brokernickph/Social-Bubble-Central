@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test",
     "icon": "node tools/make-icon.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
@@ -29,6 +30,7 @@
       "main.js",
       "preload.js",
       "bubble-preload.js",
+      "webview-preload.js",
       "renderer/**/*",
       "!tools/**/*",
       "!dist/**/*"

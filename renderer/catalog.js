@@ -115,6 +115,14 @@ const CATALOG = [
   }
 ];
 
+// Unread count from a page title. Chat apps put it first ("(3) Discord") or
+// last ("Inbox (3)"); a number elsewhere ("Notes (2024) draft") isn't a count.
+function titleUnread(title) {
+  const t = String(title || '');
+  const m = t.match(/^\s*\((\d{1,4})\+?\)/) || t.match(/\((\d{1,3})\+?\)\s*$/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 function catalogByType(type) {
   return CATALOG.find((c) => c.type === type) || null;
 }
@@ -143,4 +151,4 @@ function nextZoom(current, key, type) {
   return Math.round(Math.min(3, Math.max(0.3, current + step)) * 100) / 100;
 }
 
-if (typeof module !== 'undefined') module.exports = { CATALOG, catalogByType, catalogTweaks, nextZoom };
+if (typeof module !== 'undefined') module.exports = { CATALOG, catalogByType, catalogTweaks, nextZoom, titleUnread };

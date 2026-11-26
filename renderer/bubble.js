@@ -1,6 +1,6 @@
 'use strict';
 
-/* global catalogByType, applyTweaks, nextZoom */
+/* global catalogByType, applyTweaks, nextZoom, titleUnread */
 
 const svc = JSON.parse(new URLSearchParams(location.search).get('svc') || '{}');
 
@@ -132,9 +132,15 @@ function setUnread(n) {
 function clearPulse() { document.getElementById('head').classList.remove('pulse'); }
 
 wv.addEventListener('page-title-updated', (e) => {
-  const m = (e.title || '').match(/\((\d+)\+?\)/);
-  if (m) setUnread(parseInt(m[1], 10));
-  else if (!catalogByType(svc.type)?.probe) setUnread(0);
+  const n = titleUnread(e.title);
+  if (n || !catalogByType(svc.type)?.probe) setUnread(n);
+});
+
+// Clicking one of this chat's desktop notifications → open the bubble.
+wv.addEventListener('ipc-message', (e) => {
+  if (e.channel !== 'notification-click') return;
+  if (collapsed) setCollapsed(false);
+  window.bubbleApi.focus();
 });
 
 // probe-based services (e.g. Instagram) whose title has no count

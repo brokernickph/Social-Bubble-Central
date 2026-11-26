@@ -1,6 +1,6 @@
 'use strict';
 
-/* global CATALOG, catalogByType, applyTweaks, nextZoom */
+/* global CATALOG, catalogByType, applyTweaks, nextZoom, titleUnread, acceleratorFromEvent, displayAccelerator */
 
 // ---------------------------------------------------------------------------
 // State
@@ -223,9 +223,15 @@ function ensureWebview(svc) {
   baseline.set(svc.id, Date.now());
 
   wv.addEventListener('page-title-updated', (e) => {
-    const m = (e.title || '').match(/\((\d+)\+?\)/);
-    titleCounts.set(svc.id, m ? parseInt(m[1], 10) : 0);
+    titleCounts.set(svc.id, titleUnread(e.title));
     recomputeUnread(svc.id);
+  });
+
+  // Clicking one of this chat's desktop notifications → show Bubbly on that chat.
+  wv.addEventListener('ipc-message', (e) => {
+    if (e.channel !== 'notification-click') return;
+    window.bubbly.showWindow();
+    openService(svc.id);
   });
 
   // Inject per-service layout fixes (e.g. make Discord usable when narrow).
@@ -342,6 +348,7 @@ function updateBadge(id) {
 // Rail bubbles
 // ---------------------------------------------------------------------------
 let draggedId = null;
+let recordingHotkey = false;
 
 function renderBubbles() {
   bubblesEl.innerHTML = '';
@@ -567,6 +574,8 @@ function syncSettingsView() {
   document.getElementById('tgl-blur').classList.toggle('on', settings.collapseOnBlur);
   document.getElementById('tgl-startup').classList.toggle('on', settings.launchAtStartup);
   document.getElementById('tgl-passkey').classList.toggle('on', settings.blockPasskeys !== false);
+  if (!recordingHotkey) document.getElementById('btn-hotkey').textContent = displayAccelerator(settings.hotkey);
+  document.getElementById('hotkey-warn').hidden = settings.hotkeyOk !== false;
   renderSettingsServices();
 }
 
@@ -646,6 +655,34 @@ function buildSettingsView() {
     window.bubbly.saveSettings({ collapseOnBlur: !settings.collapseOnBlur }));
   document.getElementById('tgl-startup').addEventListener('click', () =>
     window.bubbly.saveSettings({ launchAtStartup: !settings.launchAtStartup }));
+  // Show/hide shortcut recorder: click, then press the new combination.
+  const hk = document.getElementById('btn-hotkey');
+  const stopRecording = () => {
+    recordingHotkey = false;
+    hk.classList.remove('recording');
+    hk.textContent = displayAccelerator(settings.hotkey);
+  };
+  hk.addEventListener('click', () => {
+    recordingHotkey = true;
+    hk.classList.add('recording');
+    hk.textContent = 'Press keys…';
+  });
+  hk.addEventListener('blur', () => { if (recordingHotkey) stopRecording(); });
+  hk.addEventListener('keydown', async (e) => {
+    if (!recordingHotkey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { stopRecording(); return; }
+    const acc = acceleratorFromEvent(e);
+    if (!acc) return;                 // still waiting for modifier + key
+    recordingHotkey = false;
+    const saved = await window.bubbly.saveSettings({ hotkey: acc });
+    stopRecording();
+    toast(saved.hotkey === acc && saved.hotkeyOk !== false
+      ? `Show/hide shortcut set to ${displayAccelerator(acc)}`
+      : `${displayAccelerator(acc)} is taken by another app — kept ${displayAccelerator(saved.hotkey)}`);
+  });
+
   document.getElementById('tgl-passkey').addEventListener('click', () => {
     const next = !(settings.blockPasskeys !== false);
     document.getElementById('tgl-passkey').classList.toggle('on', next);
@@ -661,6 +698,7 @@ function applyChrome() {
   appEl.classList.toggle('edge-left', settings.edge === 'left');
   appEl.classList.toggle('edge-right', settings.edge !== 'left');
   document.getElementById('rail-ghost').classList.toggle('on', settings.ghostMode);
+  for (const el of document.querySelectorAll('.hotkey-label')) el.textContent = displayAccelerator(settings.hotkey);
 }
 
 function wireChrome() {
@@ -706,7 +744,7 @@ function wireChrome() {
   document.getElementById('rail-ghost').addEventListener('click', async () => {
     await window.bubbly.saveSettings({ ghostMode: !settings.ghostMode });
     toast(settings.ghostMode
-      ? 'Ghost mode on — Bubbly hides until a message arrives (Ctrl+Shift+B to show)'
+      ? `Ghost mode on — Bubbly hides until a message arrives (${displayAccelerator(settings.hotkey)} to show)`
       : 'Ghost mode off');
   });
   document.getElementById('empty-add').addEventListener('click', () => openPanelView('add'));
@@ -837,6 +875,10 @@ window.bubbly.onSettingsChanged((s) => {
     const r = railInner.getBoundingClientRect();
     window.bubbly.setRailSize({ h: Math.ceil(r.height) + 12 });
   }).observe(railInner);
+
+  if (settings.hotkeyOk === false) {
+    toast(`${displayAccelerator(settings.hotkey)} is taken by another app — pick a new shortcut in Settings`);
+  }
 
   if (!settings.onboarded) {
     await openPanelView('onboarding');

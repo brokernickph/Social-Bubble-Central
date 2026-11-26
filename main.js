@@ -3,6 +3,7 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, shell, globalShortcut, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { displayAccelerator, isValidAccelerator } = require('./renderer/hotkey.js');
 
 const RAIL_W = 84;
 const V_MARGIN = 10;
@@ -28,6 +29,7 @@ const DEFAULTS = {
   panelWidth: 440,
   panelHeight: 720,
   blockPasskeys: true,        // suppress WebAuthn / Windows Hello passkey pop-ups
+  hotkey: 'Control+Shift+B',  // global show/hide shortcut (Electron accelerator)
   onboarded: false,
   services: [],               // { id, type, name, url, color, muted, zoom }
   floating: [],               // service ids popped out as floating bubbles (restored on launch)
@@ -53,6 +55,25 @@ const PASSKEY_PATCH = `(() => { try {
     if (window.PublicKeyCredential.isConditionalMediationAvailable)
       window.PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
   }
+} catch (e) {} })();`;
+
+// Injected into each chat page (main world): when the user clicks one of the
+// page's desktop notifications, post a message our webview preload relays to the
+// host window, which then shows Bubbly on that chat. The site's own click
+// handler still runs. (Notifications shown from a service worker aren't covered.)
+const NOTIFY_PATCH = `(() => { try {
+  const N = window.Notification;
+  if (!N || N.__bubbly) return;
+  class BubblyNotification extends N {
+    constructor(title, options) {
+      super(title, options);
+      this.addEventListener('click', () => {
+        try { window.postMessage({ __bubbly: 'notification-click' }, '*'); } catch (e) {}
+      });
+    }
+  }
+  BubblyNotification.__bubbly = true;
+  window.Notification = BubblyNotification;
 } catch (e) {} })();`;
 
 function reloadAllWebviews() {
@@ -130,6 +151,7 @@ let expanded = false;
 let mode = 'out';
 let railSize = { w: RAIL_W, h: 320 }; // reported by the renderer
 let lastUnread = 0;
+let hotkeyOk = true;                  // false when another app owns the shortcut
 let quitting = false;
 let programmaticMove = false;
 let animTimer = null;
@@ -242,7 +264,7 @@ function snapAfterDrag() {
   settings.edge = edge;
   settings.railY = clamp(railY, wa.y + V_MARGIN, wa.y + wa.height - railH - V_MARGIN);
   persistSettings();
-  win.webContents.send('bubbly:settings-changed', settings);
+  win.webContents.send('bubbly:settings-changed', publicSettings());
   animateTo(targetBounds(), 180);
 }
 
@@ -318,11 +340,12 @@ function toggleVisibility() {
 function updateTray() {
   if (!tray) return;
   tray.setImage(trayIcon(lastUnread > 0));
+  const hk = hotkeyOk ? displayAccelerator(settings.hotkey) : null;
   tray.setToolTip(lastUnread > 0
     ? `Bubbly — ${lastUnread} unread (click to show)`
-    : 'Bubbly — click to show/hide (Ctrl+Shift+B)');
+    : `Bubbly — click to show/hide${hk ? ` (${hk})` : ''}`);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show / Hide\tCtrl+Shift+B', click: toggleVisibility },
+    { label: hk ? `Show / Hide\t${hk}` : 'Show / Hide', click: toggleVisibility },
     { type: 'separator' },
     {
       label: 'Ghost mode',
@@ -467,9 +490,31 @@ function resizeBubble(sender, mode) {
 // ---------------------------------------------------------------------------
 // Settings mutation + side effects
 // ---------------------------------------------------------------------------
+// What the renderers see: stored settings plus runtime status.
+const publicSettings = () => ({ ...settings, hotkeyOk });
+
+// (Re)bind the global show/hide shortcut. Returns false if it's unusable or
+// another app already owns it.
+function bindHotkey(acc) {
+  if (!isValidAccelerator(acc)) return false;
+  try { return globalShortcut.register(acc, toggleVisibility); } catch { return false; }
+}
+
 function applySettings(patch) {
   const prev = { ...settings };
-  settings = { ...settings, ...patch };
+  const { hotkeyOk: _ignored, ...clean } = patch || {};
+  settings = { ...settings, ...clean };
+
+  if (prev.hotkey !== settings.hotkey) {
+    if (hotkeyOk) globalShortcut.unregister(prev.hotkey);
+    if (bindHotkey(settings.hotkey)) {
+      hotkeyOk = true;
+    } else {
+      // keep the old shortcut working rather than leaving none
+      settings.hotkey = prev.hotkey;
+      hotkeyOk = bindHotkey(prev.hotkey);
+    }
+  }
   persistSettings();
 
   const geometryChanged =
@@ -483,17 +528,17 @@ function applySettings(patch) {
     app.setLoginItemSettings({ openAtLogin: settings.launchAtStartup });
   }
   updateTray();
-  if (win) win.webContents.send('bubbly:settings-changed', settings);
+  if (win) win.webContents.send('bubbly:settings-changed', publicSettings());
 
   // Reload chats so the passkey patch applies (or stops applying) immediately.
   if (prev.blockPasskeys !== settings.blockPasskeys) reloadAllWebviews();
-  return settings;
+  return publicSettings();
 }
 
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
-ipcMain.handle('settings:get', () => settings);
+ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:save', (e, patch) => applySettings(patch));
 
 ipcMain.handle('panel:set-expanded', (e, value) => {
@@ -514,6 +559,13 @@ ipcMain.on('rail:size', (e, size) => {
 });
 
 ipcMain.on('window:hide', () => { if (win) win.hide(); });
+
+// e.g. a chat notification was clicked: bring the rail out and focus it.
+ipcMain.on('window:show', () => {
+  if (!win) return;
+  if (!win.isVisible() || mode === 'peek') reveal('manual');
+  win.focus();
+});
 
 ipcMain.on('unread:update', (e, { total, increased }) => {
   lastUnread = total;
@@ -594,6 +646,11 @@ ipcMain.handle('service:set-zoom', (e, { id, zoom }) => {
   return true;
 });
 
+ipcMain.on('bubble:focus', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w && !w.isDestroyed()) { w.show(); w.focus(); }
+});
+
 ipcMain.on('bubble:reveal', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w && !w.isDestroyed()) {
@@ -615,7 +672,8 @@ app.on('web-contents-created', (event, contents) => {
   // what attributes end up on the tag, and only ever loads http(s) pages.
   if (contents.getType() === 'window') {
     contents.on('will-attach-webview', (e, webPreferences, params) => {
-      delete webPreferences.preload;
+      // only our own tiny, sandboxed preload (relays notification clicks)
+      webPreferences.preload = path.join(__dirname, 'webview-preload.js');
       webPreferences.nodeIntegration = false;
       webPreferences.nodeIntegrationInSubFrames = false;
       webPreferences.contextIsolation = true;
@@ -669,6 +727,11 @@ app.on('web-contents-created', (event, contents) => {
   contents.on('dom-ready', injectPasskeyPatch);
   contents.on('did-navigate', injectPasskeyPatch);
   contents.on('did-navigate-in-page', injectPasskeyPatch);
+
+  // Notification-click hook (only chat views have the relay preload).
+  if (contents.hostWebContents) {
+    contents.on('dom-ready', () => contents.executeJavaScript(NOTIFY_PATCH, true).catch(() => {}));
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -690,11 +753,19 @@ if (!gotLock) {
     settings.floating = [];
     for (const id of restore) createBubbleWindow(settings.services.find((s) => s.id === id));
 
+    hotkeyOk = bindHotkey(settings.hotkey);
     createWindow();
     createTray();
 
-    if (!globalShortcut.register('Control+Shift+B', toggleVisibility)) {
-      console.warn('Ctrl+Shift+B is taken by another app — use the tray icon to show Bubbly.');
+    if (!hotkeyOk) {
+      const hk = displayAccelerator(settings.hotkey);
+      console.warn(`${hk} is taken by another app — use the tray icon to show Bubbly.`);
+      if (process.platform === 'win32') {
+        tray.displayBalloon({
+          title: 'Bubbly shortcut unavailable',
+          content: `${hk} is used by another app. Pick a new show/hide shortcut in Bubbly's Settings.`
+        });
+      }
     }
 
     screen.on('display-metrics-changed', () => animateTo(targetBounds(), 0));
