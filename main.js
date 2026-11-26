@@ -20,8 +20,10 @@ app.setAppUserModelId('com.speeed.bubbly');
 // Settings store (plain JSON in userData)
 // ---------------------------------------------------------------------------
 const DEFAULTS = {
-  edge: 'right',              // 'left' | 'right' — set by dragging the rail too
-  railY: null,                // top of the rail (null = centered on first run)
+  orientation: 'vertical',    // 'vertical' (left/right edge) | 'horizontal' (top/bottom edge)
+  edge: 'right',              // 'left' | 'right' | 'top' | 'bottom' — set by dragging the rail too
+  railY: null,                // vertical: top of the rail (null = centered on first run)
+  railCX: null,               // horizontal: centre of the bar (null = centre of the screen)
   idleDelaySec: 6,            // seconds before sliding into the edge
   ghostMode: false,           // fully hide until a notification arrives
   collapseOnBlur: true,       // collapse panel when focus leaves the app
@@ -31,7 +33,7 @@ const DEFAULTS = {
   blockPasskeys: true,        // suppress WebAuthn / Windows Hello passkey pop-ups
   hotkey: 'Control+Shift+B',  // global show/hide shortcut (Electron accelerator)
   onboarded: false,
-  services: [],               // { id, type, name, url, color, muted, zoom }
+  services: [],               // { id, type, name, url, color, muted, zoom, chats: [{ id, name, url }], chatsHidden }
   floating: [],               // service ids popped out as floating bubbles (restored on launch)
   bubblePos: {}               // service id -> { x, y } last position of its floating bubble
 };
@@ -83,12 +85,25 @@ function reloadAllWebviews() {
 }
 
 function loadSettings() {
+  let s;
   try {
-    return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsPath, 'utf8')) };
+    s = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsPath, 'utf8')) };
   } catch {
-    return { ...DEFAULTS };
+    s = { ...DEFAULTS };
   }
+  return normalizeLayout(s);
 }
+
+// Keep edge consistent with the orientation (vertical → left/right, horizontal → top/bottom).
+function normalizeLayout(s) {
+  const horizontal = s.orientation === 'horizontal';
+  if (horizontal && !['top', 'bottom'].includes(s.edge)) s.edge = 'bottom';
+  if (!horizontal && !['left', 'right'].includes(s.edge)) s.edge = 'right';
+  if (!horizontal) s.orientation = 'vertical';
+  return s;
+}
+
+const isHorizontal = () => settings.orientation === 'horizontal';
 
 function persistSettings() {
   try {
@@ -174,9 +189,38 @@ function railTop(wa, railH) {
   return clamp(settings.railY, wa.y + V_MARGIN, wa.y + wa.height - railH - V_MARGIN);
 }
 
+// The horizontal bar remembers its centre, so it stays put as bubbles are added.
+function railLeft(wa, railW) {
+  const cx = settings.railCX == null ? wa.x + wa.width / 2 : settings.railCX;
+  return clamp(Math.round(cx - railW / 2), wa.x + V_MARGIN, wa.x + wa.width - railW - V_MARGIN);
+}
+
+// Horizontal bar along the top or bottom edge. The panel opens above a bottom
+// bar and below a top bar, centred on the bar where the screen allows.
+function targetBoundsHorizontal(wa, m) {
+  const top = settings.edge === 'top';
+  const railW = Math.min(railSize.w, wa.width - 2 * V_MARGIN);
+
+  if (expanded) {
+    const panelW = clamp(settings.panelWidth, 320, wa.width - 2 * V_MARGIN);
+    const w = Math.max(panelW, railW);
+    const h = clamp(RAIL_W + settings.panelHeight, RAIL_W + 320, wa.height - V_MARGIN);
+    const centerX = railLeft(wa, railW) + railW / 2;
+    const x = clamp(Math.round(centerX - w / 2), wa.x + V_MARGIN, wa.x + wa.width - w - V_MARGIN);
+    const y = top ? wa.y : wa.y + wa.height - h;
+    return { x, y, width: w, height: h };
+  }
+
+  const x = railLeft(wa, railW);
+  let y = top ? wa.y : wa.y + wa.height - RAIL_W;
+  if (m === 'peek') y = top ? wa.y - (RAIL_W - PEEK_PX) : wa.y + wa.height - PEEK_PX;
+  return { x, y, width: railW, height: RAIL_W };
+}
+
 function targetBounds(modeOverride) {
   const wa = workArea();
   const m = modeOverride || mode;
+  if (isHorizontal()) return targetBoundsHorizontal(wa, m);
 
   if (expanded) {
     const h = clamp(settings.panelHeight, 480, wa.height - 2 * V_MARGIN);
@@ -199,10 +243,20 @@ function targetBounds(modeOverride) {
   return { x, y, width: RAIL_W, height: h };
 }
 
+// Positions we moved the window to ourselves. On Linux/X11 the 'move' event for
+// our own setBounds can arrive after programmaticMove is reset, so we also
+// recognise those late events by position and don't mistake them for a drag.
+const recentQuiet = [];
 function setBoundsQuiet(b) {
   programmaticMove = true;
   win.setBounds(b);
   programmaticMove = false;
+  recentQuiet.push(`${b.x},${b.y}`);
+  if (recentQuiet.length > 12) recentQuiet.shift();
+}
+function isOwnMove() {
+  const b = win.getBounds();
+  return recentQuiet.includes(`${b.x},${b.y}`);
 }
 
 function animateTo(target, ms) {
@@ -255,6 +309,17 @@ function snapAfterDrag() {
   let wa;
   try { wa = screen.getDisplayMatching(b).workArea; } catch { wa = screen.getPrimaryDisplay().workArea; }
 
+  if (isHorizontal()) {
+    const railW = expanded ? Math.min(railSize.w, b.width) : b.width;
+    settings.edge = (b.y + b.height / 2) < (wa.y + wa.height / 2) ? 'top' : 'bottom';
+    // expanded: the bar is centred in the window; collapsed: the window is the bar
+    settings.railCX = clamp(b.x + b.width / 2, wa.x + railW / 2, wa.x + wa.width - railW / 2);
+    persistSettings();
+    win.webContents.send('bubbly:settings-changed', publicSettings());
+    animateTo(targetBounds(), 180);
+    return;
+  }
+
   const edge = (b.x + b.width / 2) < (wa.x + wa.width / 2) ? 'left' : 'right';
   const railH = expanded ? Math.min(railSize.h, b.height) : b.height;
   const railY = expanded
@@ -304,7 +369,8 @@ function createWindow() {
   });
 
   win.on('move', () => {
-    if (programmaticMove || !win.isVisible()) return;
+    if (programmaticMove || !win.isVisible() || isOwnMove()) return;
+    clearInterval(animTimer);                 // the user grabbed it: stop any slide in progress
     win.webContents.send('bubbly:activity'); // dragging counts as interaction
     clearTimeout(moveDebounce);
     moveDebounce = setTimeout(snapAfterDrag, 500);
@@ -379,6 +445,18 @@ function createTray() {
 const BUBBLE_HEAD = 76;
 const BUBBLE_W = 400;
 const BUBBLE_H = 560;
+
+// What a floating bubble shows, from its id: a whole service ("<svc id>") or one
+// pinned chat ("<svc id>~<chat id>"). Chats share their service's login.
+function floatTarget(id) {
+  const [svcId, chatId] = String(id).split('~');
+  const svc = settings.services.find((s) => s.id === svcId);
+  if (!svc) return null;
+  if (!chatId) return svc;
+  const chat = (svc.chats || []).find((c) => c.id === chatId);
+  if (!chat) return null;
+  return { ...svc, id, partition: svc.id, chatOf: svc.id, chatName: chat.name, url: chat.url };
+}
 
 function createBubbleWindow(svc) {
   const existing = detached.get(svc.id);
@@ -503,7 +581,7 @@ function bindHotkey(acc) {
 function applySettings(patch) {
   const prev = { ...settings };
   const { hotkeyOk: _ignored, ...clean } = patch || {};
-  settings = { ...settings, ...clean };
+  settings = normalizeLayout({ ...settings, ...clean });
 
   if (prev.hotkey !== settings.hotkey) {
     if (hotkeyOk) globalShortcut.unregister(prev.hotkey);
@@ -519,6 +597,8 @@ function applySettings(patch) {
 
   const geometryChanged =
     prev.edge !== settings.edge ||
+    prev.orientation !== settings.orientation ||
+    prev.railCX !== settings.railCX ||
     prev.panelWidth !== settings.panelWidth ||
     prev.panelHeight !== settings.panelHeight ||
     prev.railY !== settings.railY;
@@ -554,7 +634,7 @@ ipcMain.handle('mode:set', (e, m) => {
 });
 
 ipcMain.on('rail:size', (e, size) => {
-  railSize = { w: RAIL_W, h: Math.max(140, size.h) };
+  railSize = { w: Math.max(140, size.w || 0), h: Math.max(140, size.h || 0) };
   if (!expanded && win.isVisible()) animateTo(targetBounds(), 120);
 });
 
@@ -579,28 +659,38 @@ ipcMain.on('open-external', (e, url) => {
   if (/^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 
-ipcMain.handle('bubble-menu', (e, { id, name, muted }) => {
-  const isDetached = detached.has(id) && !detached.get(id).isDestroyed();
+// Context menu built by the renderer: items are { label, value } or
+// { type: 'separator' }; resolves with the picked value (or null).
+ipcMain.handle('menu:popup', (e, items) => {
+  const host = BrowserWindow.fromWebContents(e.sender) || win;
   return new Promise((resolve) => {
     let done = false;
-    const pick = (v) => () => { done = true; resolve(v); };
-    const menu = Menu.buildFromTemplate([
-      { label: `Open ${name}`, click: pick('open') },
-      isDetached
-        ? { label: 'Show floating bubble', click: pick('focus-detached') }
-        : { label: 'Pop out as floating bubble', click: pick('detach') },
-      { label: 'Reload', click: pick('reload') },
-      { label: muted ? 'Unmute notifications' : 'Mute notifications', click: pick('mute') },
-      { label: 'Open in browser', click: pick('external') },
-      { type: 'separator' },
-      { label: 'Remove service', click: pick('remove') }
-    ]);
-    menu.popup({ window: win });
+    const template = (items || []).map((it) => (it.type === 'separator'
+      ? { type: 'separator' }
+      : { label: String(it.label), enabled: it.enabled !== false, click: () => { done = true; resolve(it.value); } }));
+    const menu = Menu.buildFromTemplate(template);
+    menu.popup({ window: host });
     menu.on('menu-will-close', () => setTimeout(() => { if (!done) resolve(null); }, 50));
   });
 });
 
-ipcMain.handle('service:detach', (e, svc) => { createBubbleWindow(svc); return true; });
+// Point a floating bubble at another page of its service (e.g. a pinned chat).
+ipcMain.handle('service:navigate-detached', (e, { id, url }) => {
+  const w = detached.get(id);
+  if (!w || w.isDestroyed() || !/^https?:\/\//i.test(url || '')) return false;
+  w.webContents.send('bubble:navigate', url);
+  w.show();
+  w.focus();
+  return true;
+});
+
+// Pop a service ("<svc id>") or a pinned chat ("<svc id>~<chat id>") out as a floating bubble.
+ipcMain.handle('service:detach', (e, id) => {
+  const t = floatTarget(id);
+  if (!t) return false;
+  createBubbleWindow(t);
+  return true;
+});
 
 ipcMain.handle('service:focus-detached', (e, id) => {
   const w = detached.get(id);
@@ -748,10 +838,9 @@ if (!gotLock) {
   app.whenReady().then(() => {
     // Bring back bubbles that were floating when Bubbly last quit. Created before
     // the rail so its first listDetached() already knows about them.
-    const ids = new Set(settings.services.map((s) => s.id));
-    const restore = (settings.floating || []).filter((id) => ids.has(id));
+    const restore = (settings.floating || []).map(floatTarget).filter(Boolean);
     settings.floating = [];
-    for (const id of restore) createBubbleWindow(settings.services.find((s) => s.id === id));
+    for (const t of restore) createBubbleWindow(t);
 
     hotkeyOk = bindHotkey(settings.hotkey);
     createWindow();

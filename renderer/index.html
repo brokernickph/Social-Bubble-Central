@@ -6,6 +6,7 @@
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:;" />
   <title>Bubbly</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="icons.css" />
 </head>
 <body>
   <div id="app" class="edge-right collapsed">
@@ -19,12 +20,24 @@
         </div>
         <div id="panel-actions">
           <button class="icon-btn" id="btn-reload"   title="Reload"></button>
+          <button class="icon-btn" id="btn-pin"      title="Pin this chat as its own bubble"></button>
           <button class="icon-btn" id="btn-detach"   title="Pop out as a floating bubble"></button>
           <button class="icon-btn" id="btn-external" title="Open in browser"></button>
           <button class="icon-btn" id="btn-settings" title="Settings"></button>
           <button class="icon-btn" id="btn-collapse" title="Collapse (Esc)"></button>
         </div>
       </header>
+
+      <div id="name-dialog" hidden>
+        <div class="name-card">
+          <h4 id="name-title">Pin chat</h4>
+          <input id="name-input" type="text" maxlength="40" placeholder="Chat name (e.g. Sam)" />
+          <div class="name-actions">
+            <button class="ghost-btn" id="name-cancel">Cancel</button>
+            <button class="primary" id="name-ok">Pin</button>
+          </div>
+        </div>
+      </div>
 
       <div id="views">
         <!-- webviews are injected here -->
@@ -70,10 +83,21 @@
             <div class="group">
               <h3>Dock</h3>
               <div class="row">
+                <label>Layout
+                  <small>A vertical rail on the side, or a horizontal bar along the top or bottom</small>
+                </label>
+                <div class="segmented" id="seg-orient">
+                  <button data-orient="vertical">Vertical</button>
+                  <button data-orient="horizontal">Horizontal</button>
+                </div>
+              </div>
+              <div class="row">
                 <label>Screen edge</label>
                 <div class="segmented" id="seg-edge">
                   <button data-edge="left">Left</button>
                   <button data-edge="right">Right</button>
+                  <button data-edge="top">Top</button>
+                  <button data-edge="bottom">Bottom</button>
                 </div>
               </div>
               <div class="row">
@@ -88,8 +112,11 @@
                 <input type="range" id="rng-height" min="480" max="1000" step="40" />
                 <span class="val" id="val-height"></span>
               </div>
-              <p class="hint">Drag the rail by its grip (or any gap) to move it — drop it near
-                 the left or right edge and it snaps there.</p>
+              <p class="hint">Drag the rail by its grip (or any gap) to move it — it snaps to
+                 the nearest edge for its layout.</p>
+              <p class="hint">Pin a conversation with the 📌 button in the panel header: it
+                 gets its own bubble next to its service. Right-click a chat bubble to rename,
+                 pop out or unpin it.</p>
             </div>
 
             <div class="group">
@@ -170,6 +197,8 @@
 
   <script src="catalog.js"></script>
   <script src="hotkey.js"></script>
+  <script src="logos.js"></script>
+  <script src="svc-icon.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

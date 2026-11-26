@@ -30,8 +30,10 @@ html, body {
   height: 100vh;
   align-items: stretch;
 }
-#app.edge-right { flex-direction: row; }
-#app.edge-left  { flex-direction: row-reverse; }
+#app.edge-right  { flex-direction: row; }
+#app.edge-left   { flex-direction: row-reverse; }
+#app.edge-bottom { flex-direction: column; }          /* panel above the bar */
+#app.edge-top    { flex-direction: column-reverse; }  /* panel below the bar */
 
 button:focus, input:focus { outline: none; }
 button:focus-visible { box-shadow: 0 0 0 2px rgba(124, 92, 255, 0.55); }
@@ -154,6 +156,84 @@ body.peeking.has-unread #peek-glow {
 }
 /* once a favicon loads, drop the brand-color fill so the icon sits clean */
 .monogram.has-img { background: var(--bg-softer) !important; }
+.monogram { position: relative; }
+
+/* ---- service groups + pinned-chat bubbles ---- */
+.svc-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.svc-group.dragging { opacity: 0.4; }
+
+.chat-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  width: 52px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--stroke);
+}
+.bubble.chat { width: 38px; height: 38px; }
+.bubble.chat .monogram { font-size: 13px; text-shadow: none; }
+.bubble.chat .detach-dot { width: 15px; height: 15px; top: -3px; right: -3px; bottom: auto; }
+.bubble.chat .detach-dot svg { width: 8px; height: 8px; }
+
+/* panel header icon */
+.hdr-icon {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+.hdr-icon img { width: 15px; height: 15px; border-radius: 3px; }
+.hdr-icon .svc-mini { min-width: 11px; min-height: 11px; border-width: 1.5px; }
+
+/* ---- horizontal bar (top / bottom edge) ---- */
+#app.horizontal #rail { width: auto; height: var(--rail-w); }
+#app.horizontal #rail-inner {
+  flex-direction: row;
+  padding: 4px 8px;
+  max-height: none;
+  max-width: 100%;
+}
+#app.horizontal #rail-grip {
+  grid-template-columns: repeat(3, 4px);
+  padding: 0 2px 0 4px;
+}
+#app.horizontal #bubbles {
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+#app.horizontal .svc-group { flex-direction: row; }
+#app.horizontal .chat-group {
+  flex-direction: row;
+  padding: 0 8px;
+  width: auto;
+  height: 52px;
+}
+#app.horizontal #rail-footer {
+  flex-direction: row;
+  padding-top: 0;
+  padding-left: 10px;
+  border-top: none;
+  border-left: 1px solid var(--stroke);
+}
+#app.horizontal #peek-glow { top: auto; bottom: auto; left: 14px; right: 14px; width: auto; height: 4px; }
+#app.edge-bottom #peek-glow { top: 2px; }
+#app.edge-top    #peek-glow { bottom: 2px; }
 
 .bubble .badge {
   position: absolute;
@@ -257,7 +337,60 @@ body.peeking.has-unread #peek-glow {
   transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.18s ease;
 }
 #app.edge-left #panel { margin: 6px 6px 6px 0; transform: translateX(-48px); }
-#panel.open { opacity: 1; transform: translateX(0) !important; }
+#app.edge-bottom #panel { margin: 6px 6px 0 6px; transform: translateY(48px); }
+#app.edge-top    #panel { margin: 0 6px 6px 6px; transform: translateY(-48px); }
+/* horizontal: the panel keeps the Panel width setting, centred over the bar */
+#app.horizontal #panel { align-self: center; width: min(var(--panel-w, 440px), calc(100% - 12px)); flex: 1 1 auto; }
+#panel.open { opacity: 1; transform: none !important; }
+#panel { position: relative; }
+
+/* small "name this chat" dialog over the panel */
+#name-dialog {
+  position: absolute;
+  inset: 48px 0 0 0;
+  z-index: 50;
+  background: rgba(10, 11, 18, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 40px;
+}
+#name-dialog[hidden] { display: none; }
+.name-card {
+  width: min(320px, calc(100% - 32px));
+  background: #1d1e2a;
+  border: 1px solid var(--stroke);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.name-card h4 { font-size: 14px; font-weight: 600; }
+.name-card input {
+  background: var(--bg-soft);
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  user-select: text;
+}
+.name-card input:focus { border-color: var(--accent); }
+.name-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.ghost-btn {
+  border: 1px solid var(--stroke);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 10px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ghost-btn:hover { color: var(--text); background: var(--bg-soft); }
 #app.collapsed #panel { display: none; }
 
 #panel-header {
@@ -531,6 +664,12 @@ button.primary.big { padding: 13px 34px; font-size: 15px; border-radius: 14px; }
   flex-shrink: 0;
 }
 .svc-row .dot img { width: 16px; height: 16px; border-radius: 3px; }
+.svc-row .dot { position: relative; }
+.svc-row .dot.has-logo .logo { width: 58%; height: 58%; }
+.svc-row.chat-row { padding-left: 28px; }
+.svc-row.chat-row .dot { width: 22px; height: 22px; font-size: 9px; }
+.svc-row.chat-row .svc-mini { min-width: 11px; min-height: 11px; border-width: 1.5px; }
+.catalog-card .dot.has-logo .logo { width: 58%; height: 58%; }
 .svc-row .svc-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .svc-row .icon-btn { width: 30px; height: 30px; }
 .svc-row .icon-btn.danger:hover { color: var(--danger); background: rgba(255, 77, 94, 0.12); }

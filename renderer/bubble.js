@@ -1,6 +1,6 @@
 'use strict';
 
-/* global catalogByType, applyTweaks, nextZoom, titleUnread */
+/* global catalogByType, applyTweaks, nextZoom, titleUnread, fillServiceIcon, fillChatIcon */
 
 const svc = JSON.parse(new URLSearchParams(location.search).get('svc') || '{}');
 
@@ -11,39 +11,19 @@ const ICONS = {
 };
 const svg = (n) => `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="${ICONS[n]}"/></svg>`;
 
-function faviconUrl(s) {
-  const cat = catalogByType(s.type);
-  let domain = cat && cat.domain;
-  if (!domain) { try { domain = new URL(s.url).hostname; } catch { domain = null; } }
-  return domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=64` : null;
-}
-
-function fillIcon(el, big) {
-  el.style.background = svc.color || '#666';
-  const url = faviconUrl(svc);
-  if (url) {
-    const img = document.createElement('img');
-    img.src = url;
-    img.alt = '';
-    img.addEventListener('error', () => { img.remove(); el.textContent = (svc.name || '?')[0].toUpperCase(); el.style.background = svc.color || '#666'; });
-    img.addEventListener('load', () => { el.style.background = big ? 'rgba(255,255,255,0.06)' : 'transparent'; });
-    el.appendChild(img);
-  } else {
-    el.textContent = (svc.name || '?')[0].toUpperCase();
-  }
-}
+// A pinned chat's bubble carries chatOf (its service id) and chatName.
+const isChat = !!svc.chatOf;
+const fillIcon = (el) => (isChat ? fillChatIcon(el, { name: svc.chatName }, svc) : fillServiceIcon(el, svc));
 
 // ---------------------------------------------------------------------------
 // Build UI
 // ---------------------------------------------------------------------------
-document.title = `${svc.name} — Bubbly`;
-document.getElementById('bar-name').textContent = svc.name || 'Chat';
-fillIcon(document.getElementById('head-icon'), true);
-const barIcon = document.getElementById('bar-icon');
-const barIconWrap = document.createElement('span');
-barIconWrap.style.display = 'flex';
-fillIcon(barIconWrap, false);
-barIcon.appendChild(barIconWrap);
+const label = isChat ? `${svc.chatName} · ${svc.name}` : (svc.name || 'Chat');
+document.title = `${label} — Bubbly`;
+document.getElementById('bar-name').textContent = label;
+document.getElementById('head').title = `${label} — drag to move · click to open`;
+fillIcon(document.getElementById('head-icon'));
+fillIcon(document.getElementById('bar-icon'));
 
 document.getElementById('btn-reload').innerHTML = svg('reload');
 document.getElementById('btn-min').innerHTML = svg('min');
@@ -51,7 +31,7 @@ document.getElementById('btn-close').innerHTML = svg('close');
 
 // webview
 const wv = document.createElement('webview');
-wv.setAttribute('partition', 'persist:' + svc.id);   // shares the rail's login
+wv.setAttribute('partition', 'persist:' + (svc.partition || svc.id));   // shares the rail's login
 wv.setAttribute('allowpopups', '');
 wv.setAttribute('webpreferences', 'backgroundThrottling=false,contextIsolation=true,sandbox=true');
 wv.src = svc.url;
@@ -59,13 +39,19 @@ document.getElementById('host').appendChild(wv);
 
 wv.addEventListener('dom-ready', () => applyTweaks(wv, svc));
 
+// The rail asked this bubble to show another page of the service (a pinned chat).
+window.bubbleApi.onNavigate((url) => {
+  try { wv.loadURL(url); } catch { wv.src = url; }
+  if (collapsed) setCollapsed(false);
+});
+
 // Ctrl +/-/0 inside the chat → zoom this bubble and remember it for the service.
 window.bubbleApi.onZoomKey((key) => {
   try {
     const z = nextZoom(wv.getZoomFactor(), key, svc.type);
     wv.setZoomFactor(z);
     svc.zoom = z;
-    window.bubbleApi.setZoom(svc.id, z);
+    window.bubbleApi.setZoom(svc.chatOf || svc.id, z);
   } catch { /* not ready */ }
 });
 
@@ -114,7 +100,11 @@ function updateBadge() {
   const shown = collapsed ? unread : 0;   // only badge the collapsed head
   const badge = document.getElementById('head-badge');
   badge.hidden = shown <= 0;
-  badge.textContent = shown > 99 ? '99+' : String(shown);
+  // A pinned chat only knows its service's total, not this conversation's own
+  // count, so it shows a plain dot ("something new in Messenger") instead.
+  badge.classList.toggle('dot', isChat);
+  badge.title = isChat ? `${shown} unread in ${svc.name}` : '';
+  badge.textContent = isChat ? '' : (shown > 99 ? '99+' : String(shown));
 }
 
 function setUnread(n) {

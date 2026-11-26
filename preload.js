@@ -12,9 +12,10 @@ contextBridge.exposeInMainWorld('bubbly', {
   showWindow: () => ipcRenderer.send('window:show'),
   updateUnread: (payload) => ipcRenderer.send('unread:update', payload),
   openExternal: (url) => ipcRenderer.send('open-external', url),
-  bubbleMenu: (info) => ipcRenderer.invoke('bubble-menu', info),
+  popupMenu: (items) => ipcRenderer.invoke('menu:popup', items),       // [{ label, value } | { type: 'separator' }]
 
-  detachService: (svc) => ipcRenderer.invoke('service:detach', svc),
+  detachService: (id) => ipcRenderer.invoke('service:detach', id),     // service id or "<svc id>~<chat id>"
+  navigateDetached: (id, url) => ipcRenderer.invoke('service:navigate-detached', { id, url }),
   focusDetached: (id) => ipcRenderer.invoke('service:focus-detached', id),
   listDetached: () => ipcRenderer.invoke('service:list-detached'),
   closeDetached: (id) => ipcRenderer.invoke('service:close-detached', id),

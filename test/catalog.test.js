@@ -45,3 +45,29 @@ test('nextZoom steps, clamps and resets to the service default', () => {
   assert.equal(nextZoom(1.7, '0', 'discord'), 0.8);
   assert.equal(nextZoom(1.7, '0', 'custom'), 1);
 });
+
+const { chatNameFromTitle, isPinnableChatUrl } = require('../renderer/catalog.js');
+
+test('chatNameFromTitle strips counts and the service name', () => {
+  assert.equal(chatNameFromTitle('(2) Sam | Messenger', ['Messenger']), 'Sam');
+  assert.equal(chatNameFromTitle('Priya - Telegram', ['Telegram']), 'Priya');
+  assert.equal(chatNameFromTitle('Discord | #general | Gaming crew', ['Discord']), '#general');
+  assert.equal(chatNameFromTitle('Messenger', ['Messenger']), '');
+  assert.equal(chatNameFromTitle('', ['X']), '');
+});
+
+test('isPinnableChatUrl only accepts a page other than the start page', () => {
+  const svc = { url: 'https://www.messenger.com/' };
+  assert.ok(isPinnableChatUrl('https://www.messenger.com/t/12345', svc));
+  assert.ok(isPinnableChatUrl('https://web.telegram.org/a/#-100123', { url: 'https://web.telegram.org/a/' }));
+  assert.ok(!isPinnableChatUrl('https://www.messenger.com/', svc));
+  assert.ok(!isPinnableChatUrl('https://www.messenger.com', svc));
+  assert.ok(!isPinnableChatUrl('about:blank', svc));
+  assert.ok(!isPinnableChatUrl('not a url', svc));
+});
+
+test('services that use one address for every chat are marked', () => {
+  assert.ok(catalogByType('whatsapp').noChatLinks);
+  assert.ok(catalogByType('snapchat').noChatLinks);
+  assert.ok(!catalogByType('messenger').noChatLinks);
+});

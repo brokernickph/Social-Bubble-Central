@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('bubbleApi', {
   openExternal: (url) => ipcRenderer.send('open-external', url),
   reportUnread: (payload) => ipcRenderer.send('bubble:unread', payload),  // { id, count, increased }
   setZoom: (id, zoom) => ipcRenderer.invoke('service:set-zoom', { id, zoom }),
-  onZoomKey: (cb) => ipcRenderer.on('bubbly:zoom-key', (e, key) => cb(key))
+  onZoomKey: (cb) => ipcRenderer.on('bubbly:zoom-key', (e, key) => cb(key)),
+  onNavigate: (cb) => ipcRenderer.on('bubble:navigate', (e, url) => cb(url))
 });
