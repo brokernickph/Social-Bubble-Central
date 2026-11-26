@@ -1,0 +1,32 @@
+/* Service + chat icons (see svc-icon.js), shared by the rail and floating bubbles. */
+
+.has-logo .logo { width: 56%; height: 56%; display: block; pointer-events: none; }
+
+/* a pinned chat: initials on the service colour + a little service badge */
+.initials {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  line-height: 1;
+}
+.svc-mini {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 42%;
+  height: 42%;
+  min-width: 15px;
+  min-height: 15px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #14151f;
+  overflow: hidden;
+  font-size: 8px;
+  font-weight: 700;
+  color: #fff;
+  pointer-events: none;
+}
+.svc-mini.has-logo .logo { width: 66%; height: 66%; }
+.svc-mini img { width: 70%; height: 70%; border-radius: 3px; }

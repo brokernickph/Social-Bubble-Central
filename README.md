@@ -4,15 +4,20 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 
 ## Features
 
+![Logos and pinned chats](docs/screenshots/1-overview.png)
+
 - **Edge rail** — a slim, always-on-top dock of service bubbles that hugs its content (no dead zone along the edge). Click a bubble to expand the chat panel; press `Esc` or click elsewhere to collapse it back.
+- **Vertical or horizontal** — Settings → Dock → Layout: a vertical rail on the left/right edge, or a horizontal bar along the top/bottom; the chat panel opens beside, above or below it.
+- **Real service logos** — bubbles show each service's logo (bundled from [Simple Icons](https://simpleicons.org), CC0), so they look right even offline. Services Simple Icons doesn't carry (Slack, LinkedIn, custom sites) use the site's favicon. Brand names and logos belong to their owners and are used only to identify each service.
+- **Pinned chats** — open a conversation and press 📌 in the panel header: it gets its own bubble right after its service's logo bubble, showing the chat's initials with a small service badge. Click it to jump straight to that conversation, or right-click to rename, pop out as a floating chat head, or unpin. Works for services with a separate link per chat (Messenger, Instagram, Discord, Telegram, X, Slack, LinkedIn…); WhatsApp and Snapchat use one address for every chat, so their chats can't be pinned. Unread counts are per service, not per chat.
 - **Movable** — drag the rail by its grip (or any gap between bubbles, or the panel header) and drop it anywhere; it snaps to the nearest screen edge, left or right, and remembers its vertical spot.
-- **Floating chat-head bubbles** — pop any chat out of the panel into a floating, always-on-top bubble you can drag anywhere and use independently (the ⧉ button in the panel header, or right-click a bubble → "Pop out as floating bubble"). It opens as a compact chat panel with its own header, and collapses to a 76px draggable head (Messenger-style) — click the head to reopen. It shares the same login session, shows an unread badge, and pulses when a new message arrives while collapsed. The rail bubble gets a cyan badge while it's floating; click it to bring the bubble forward, and closing the bubble returns the chat to the panel.
+- **Floating chat-head bubbles** — pop any chat out of the panel into a floating, always-on-top bubble you can drag anywhere and use independently (the ⧉ button in the panel header, or right-click a bubble → "Pop out as floating bubble"). It opens as a compact chat panel with its own header, and collapses to a 76px draggable head (Messenger-style) — click the head to reopen. It shares the same login session, shows an unread badge, and pulses when a new message arrives while collapsed. The rail bubble gets a cyan badge while it's floating; click it to bring the bubble forward, and closing the bubble returns the chat to the panel. Floating bubbles remember where you left them, come back when you relaunch Bubbly, and their unread counts still show on the rail bubble and in the tray total.
 - **Narrow-layout fixes** — desktop web apps like Discord assume a wide window, so Bubbly injects per-service CSS + zoom (see `catalogTweaks` in [catalog.js](renderer/catalog.js)) to make them usable in a narrow panel/bubble. For Discord it hides the server-icon rail and member list and zooms to 0.8, so the message column actually has room. You can also widen the docked panel (Settings → Dock → Panel width, up to 960px).
 - **Slide-away idle** — when you're not interacting, the whole rail slides into the screen edge leaving a 12px sliver with a glow strip (violet, or red when there are unreads). Hover the sliver and it glides back out.
 - **Ghost mode** — Bubbly hides completely and slides back in when a new message arrives. Bring it back anytime with `Ctrl+Shift+B` or the tray icon. Toggle from the rail (ghost button), the tray menu, or Settings.
 - **Real logins, kept private** — every service is the real web app in its own isolated, persistent session. Log in once; sessions survive restarts. Two accounts of the same service work fine (add it twice).
 - **Unread badges** — page titles and per-service DOM probes feed unread counts to bubble badges and the tray tooltip. New messages pulse the bubble and reveal the window in ghost mode.
-- **Notifications** — services can fire native Windows notifications (grant permission inside each service).
+- **Notifications** — services can fire native Windows notifications (grant permission inside each service). Clicking one brings Bubbly out and opens that chat (or expands its floating bubble). Notifications a site sends from a service worker aren't covered.
 - **Mute per service** — right-click a bubble → mute; muted services never pulse, reveal, or count toward the total.
 - **Drag to reorder** bubbles; right-click for reload / open-in-browser / remove.
 - **OAuth-friendly** — "Continue with Google/Facebook/Apple" popups open as proper windows so SSO logins complete in-app; all other external links open in your default browser.
@@ -22,9 +27,9 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+Shift+B` | Show / hide Bubbly (global) |
+| `Ctrl+Shift+B` | Show / hide Bubbly (global). Change it in Settings → System; if another app already owns it, Bubbly warns you and keeps your previous shortcut. |
 | `Esc` | Collapse the panel |
-| `Ctrl` `+` / `-` / `0` | Zoom the active service |
+| `Ctrl` `+` / `-` / `0` | Zoom the active service (works while typing in a chat; remembered per service; `0` resets to the service's default fit) |
 
 ## Run (development)
 
@@ -32,6 +37,14 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 npm install
 npm start
 ```
+
+## Tests
+
+```
+npm test
+```
+
+Unit tests (Node's built-in runner) cover unread-title parsing, the service catalog, zoom steps and shortcut recording.
 
 ## Build a native Windows app
 

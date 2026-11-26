@@ -3,6 +3,7 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, shell, globalShortcut, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { displayAccelerator, isValidAccelerator } = require('./renderer/hotkey.js');
 
 const RAIL_W = 84;
 const V_MARGIN = 10;
@@ -19,8 +20,10 @@ app.setAppUserModelId('com.speeed.bubbly');
 // Settings store (plain JSON in userData)
 // ---------------------------------------------------------------------------
 const DEFAULTS = {
-  edge: 'right',              // 'left' | 'right' — set by dragging the rail too
-  railY: null,                // top of the rail (null = centered on first run)
+  orientation: 'vertical',    // 'vertical' (left/right edge) | 'horizontal' (top/bottom edge)
+  edge: 'right',              // 'left' | 'right' | 'top' | 'bottom' — set by dragging the rail too
+  railY: null,                // vertical: top of the rail (null = centered on first run)
+  railCX: null,               // horizontal: centre of the bar (null = centre of the screen)
   idleDelaySec: 6,            // seconds before sliding into the edge
   ghostMode: false,           // fully hide until a notification arrives
   collapseOnBlur: true,       // collapse panel when focus leaves the app
@@ -28,8 +31,11 @@ const DEFAULTS = {
   panelWidth: 440,
   panelHeight: 720,
   blockPasskeys: true,        // suppress WebAuthn / Windows Hello passkey pop-ups
+  hotkey: 'Control+Shift+B',  // global show/hide shortcut (Electron accelerator)
   onboarded: false,
-  services: []                // { id, type, name, url, color, muted }
+  services: [],               // { id, type, name, url, color, muted, zoom, chats: [{ id, name, url }], chatsHidden }
+  floating: [],               // service ids popped out as floating bubbles (restored on launch)
+  bubblePos: {}               // service id -> { x, y } last position of its floating bubble
 };
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
@@ -53,6 +59,25 @@ const PASSKEY_PATCH = `(() => { try {
   }
 } catch (e) {} })();`;
 
+// Injected into each chat page (main world): when the user clicks one of the
+// page's desktop notifications, post a message our webview preload relays to the
+// host window, which then shows Bubbly on that chat. The site's own click
+// handler still runs. (Notifications shown from a service worker aren't covered.)
+const NOTIFY_PATCH = `(() => { try {
+  const N = window.Notification;
+  if (!N || N.__bubbly) return;
+  class BubblyNotification extends N {
+    constructor(title, options) {
+      super(title, options);
+      this.addEventListener('click', () => {
+        try { window.postMessage({ __bubbly: 'notification-click' }, '*'); } catch (e) {}
+      });
+    }
+  }
+  BubblyNotification.__bubbly = true;
+  window.Notification = BubblyNotification;
+} catch (e) {} })();`;
+
 function reloadAllWebviews() {
   for (const wc of webContents.getAllWebContents()) {
     if (wc.getType() === 'webview') { try { wc.reload(); } catch { /* not ready */ } }
@@ -60,12 +85,25 @@ function reloadAllWebviews() {
 }
 
 function loadSettings() {
+  let s;
   try {
-    return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsPath, 'utf8')) };
+    s = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(settingsPath, 'utf8')) };
   } catch {
-    return { ...DEFAULTS };
+    s = { ...DEFAULTS };
   }
+  return normalizeLayout(s);
 }
+
+// Keep edge consistent with the orientation (vertical → left/right, horizontal → top/bottom).
+function normalizeLayout(s) {
+  const horizontal = s.orientation === 'horizontal';
+  if (horizontal && !['top', 'bottom'].includes(s.edge)) s.edge = 'bottom';
+  if (!horizontal && !['left', 'right'].includes(s.edge)) s.edge = 'right';
+  if (!horizontal) s.orientation = 'vertical';
+  return s;
+}
+
+const isHorizontal = () => settings.orientation === 'horizontal';
 
 function persistSettings() {
   try {
@@ -128,11 +166,13 @@ let expanded = false;
 let mode = 'out';
 let railSize = { w: RAIL_W, h: 320 }; // reported by the renderer
 let lastUnread = 0;
+let hotkeyOk = true;                  // false when another app owns the shortcut
 let quitting = false;
 let programmaticMove = false;
 let animTimer = null;
 let moveDebounce = null;
 const detached = new Map();           // service id -> its standalone BrowserWindow
+const detachedUnread = new Map();     // service id -> last unread count its bubble reported
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -149,9 +189,38 @@ function railTop(wa, railH) {
   return clamp(settings.railY, wa.y + V_MARGIN, wa.y + wa.height - railH - V_MARGIN);
 }
 
+// The horizontal bar remembers its centre, so it stays put as bubbles are added.
+function railLeft(wa, railW) {
+  const cx = settings.railCX == null ? wa.x + wa.width / 2 : settings.railCX;
+  return clamp(Math.round(cx - railW / 2), wa.x + V_MARGIN, wa.x + wa.width - railW - V_MARGIN);
+}
+
+// Horizontal bar along the top or bottom edge. The panel opens above a bottom
+// bar and below a top bar, centred on the bar where the screen allows.
+function targetBoundsHorizontal(wa, m) {
+  const top = settings.edge === 'top';
+  const railW = Math.min(railSize.w, wa.width - 2 * V_MARGIN);
+
+  if (expanded) {
+    const panelW = clamp(settings.panelWidth, 320, wa.width - 2 * V_MARGIN);
+    const w = Math.max(panelW, railW);
+    const h = clamp(RAIL_W + settings.panelHeight, RAIL_W + 320, wa.height - V_MARGIN);
+    const centerX = railLeft(wa, railW) + railW / 2;
+    const x = clamp(Math.round(centerX - w / 2), wa.x + V_MARGIN, wa.x + wa.width - w - V_MARGIN);
+    const y = top ? wa.y : wa.y + wa.height - h;
+    return { x, y, width: w, height: h };
+  }
+
+  const x = railLeft(wa, railW);
+  let y = top ? wa.y : wa.y + wa.height - RAIL_W;
+  if (m === 'peek') y = top ? wa.y - (RAIL_W - PEEK_PX) : wa.y + wa.height - PEEK_PX;
+  return { x, y, width: railW, height: RAIL_W };
+}
+
 function targetBounds(modeOverride) {
   const wa = workArea();
   const m = modeOverride || mode;
+  if (isHorizontal()) return targetBoundsHorizontal(wa, m);
 
   if (expanded) {
     const h = clamp(settings.panelHeight, 480, wa.height - 2 * V_MARGIN);
@@ -174,10 +243,20 @@ function targetBounds(modeOverride) {
   return { x, y, width: RAIL_W, height: h };
 }
 
+// Positions we moved the window to ourselves. On Linux/X11 the 'move' event for
+// our own setBounds can arrive after programmaticMove is reset, so we also
+// recognise those late events by position and don't mistake them for a drag.
+const recentQuiet = [];
 function setBoundsQuiet(b) {
   programmaticMove = true;
   win.setBounds(b);
   programmaticMove = false;
+  recentQuiet.push(`${b.x},${b.y}`);
+  if (recentQuiet.length > 12) recentQuiet.shift();
+}
+function isOwnMove() {
+  const b = win.getBounds();
+  return recentQuiet.includes(`${b.x},${b.y}`);
 }
 
 function animateTo(target, ms) {
@@ -230,6 +309,17 @@ function snapAfterDrag() {
   let wa;
   try { wa = screen.getDisplayMatching(b).workArea; } catch { wa = screen.getPrimaryDisplay().workArea; }
 
+  if (isHorizontal()) {
+    const railW = expanded ? Math.min(railSize.w, b.width) : b.width;
+    settings.edge = (b.y + b.height / 2) < (wa.y + wa.height / 2) ? 'top' : 'bottom';
+    // expanded: the bar is centred in the window; collapsed: the window is the bar
+    settings.railCX = clamp(b.x + b.width / 2, wa.x + railW / 2, wa.x + wa.width - railW / 2);
+    persistSettings();
+    win.webContents.send('bubbly:settings-changed', publicSettings());
+    animateTo(targetBounds(), 180);
+    return;
+  }
+
   const edge = (b.x + b.width / 2) < (wa.x + wa.width / 2) ? 'left' : 'right';
   const railH = expanded ? Math.min(railSize.h, b.height) : b.height;
   const railY = expanded
@@ -239,7 +329,7 @@ function snapAfterDrag() {
   settings.edge = edge;
   settings.railY = clamp(railY, wa.y + V_MARGIN, wa.y + wa.height - railH - V_MARGIN);
   persistSettings();
-  win.webContents.send('bubbly:settings-changed', settings);
+  win.webContents.send('bubbly:settings-changed', publicSettings());
   animateTo(targetBounds(), 180);
 }
 
@@ -279,7 +369,8 @@ function createWindow() {
   });
 
   win.on('move', () => {
-    if (programmaticMove || !win.isVisible()) return;
+    if (programmaticMove || !win.isVisible() || isOwnMove()) return;
+    clearInterval(animTimer);                 // the user grabbed it: stop any slide in progress
     win.webContents.send('bubbly:activity'); // dragging counts as interaction
     clearTimeout(moveDebounce);
     moveDebounce = setTimeout(snapAfterDrag, 500);
@@ -315,11 +406,12 @@ function toggleVisibility() {
 function updateTray() {
   if (!tray) return;
   tray.setImage(trayIcon(lastUnread > 0));
+  const hk = hotkeyOk ? displayAccelerator(settings.hotkey) : null;
   tray.setToolTip(lastUnread > 0
     ? `Bubbly — ${lastUnread} unread (click to show)`
-    : 'Bubbly — click to show/hide (Ctrl+Shift+B)');
+    : `Bubbly — click to show/hide${hk ? ` (${hk})` : ''}`);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show / Hide\tCtrl+Shift+B', click: toggleVisibility },
+    { label: hk ? `Show / Hide\t${hk}` : 'Show / Hide', click: toggleVisibility },
     { type: 'separator' },
     {
       label: 'Ghost mode',
@@ -354,6 +446,18 @@ const BUBBLE_HEAD = 76;
 const BUBBLE_W = 400;
 const BUBBLE_H = 560;
 
+// What a floating bubble shows, from its id: a whole service ("<svc id>") or one
+// pinned chat ("<svc id>~<chat id>"). Chats share their service's login.
+function floatTarget(id) {
+  const [svcId, chatId] = String(id).split('~');
+  const svc = settings.services.find((s) => s.id === svcId);
+  if (!svc) return null;
+  if (!chatId) return svc;
+  const chat = (svc.chats || []).find((c) => c.id === chatId);
+  if (!chat) return null;
+  return { ...svc, id, partition: svc.id, chatOf: svc.id, chatName: chat.name, url: chat.url };
+}
+
 function createBubbleWindow(svc) {
   const existing = detached.get(svc.id);
   if (existing && !existing.isDestroyed()) {
@@ -362,9 +466,18 @@ function createBubbleWindow(svc) {
     return existing;
   }
 
-  const wa = screen.getPrimaryDisplay().workArea;
-  const startX = clamp(wa.x + wa.width - BUBBLE_W - 120, wa.x + 20, wa.x + wa.width - BUBBLE_W - 20);
-  const startY = clamp(wa.y + 100, wa.y + 20, wa.y + wa.height - BUBBLE_H - 20);
+  // Reopen where the user last left it (if that spot is still on a screen).
+  const saved = settings.bubblePos && settings.bubblePos[svc.id];
+  let wa = screen.getPrimaryDisplay().workArea;
+  let startX = wa.x + wa.width - BUBBLE_W - 120;
+  let startY = wa.y + 100;
+  if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+    wa = screen.getDisplayNearestPoint({ x: saved.x, y: saved.y }).workArea;
+    startX = saved.x;
+    startY = saved.y;
+  }
+  startX = clamp(startX, wa.x, wa.x + wa.width - BUBBLE_W);
+  startY = clamp(startY, wa.y, wa.y + wa.height - BUBBLE_H);
 
   const w = new BrowserWindow({
     width: BUBBLE_W,
@@ -395,12 +508,38 @@ function createBubbleWindow(svc) {
     query: { svc: JSON.stringify(svc) }
   });
   w.once('ready-to-show', () => w.showInactive());
+
+  let posTimer = null;
+  w.on('move', () => {
+    clearTimeout(posTimer);
+    posTimer = setTimeout(() => {
+      if (w.isDestroyed()) return;
+      const b = w.getBounds();
+      settings.bubblePos = { ...settings.bubblePos, [svc.id]: { x: b.x, y: b.y } };
+      persistSettings();
+    }, 400);
+  });
+
   w.on('closed', () => {
+    clearTimeout(posTimer);
     detached.delete(svc.id);
-    if (win && !win.isDestroyed()) win.webContents.send('bubbly:reattached', svc.id);
+    detachedUnread.delete(svc.id);
+    // Quitting closes every bubble — keep them listed so they come back next launch.
+    if (!quitting) {
+      settings.floating = (settings.floating || []).filter((id) => id !== svc.id);
+      persistSettings();
+    }
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('bubbly:detached-unread', { id: svc.id, count: 0 });
+      win.webContents.send('bubbly:reattached', svc.id);
+    }
   });
 
   detached.set(svc.id, w);
+  if (!(settings.floating || []).includes(svc.id)) {
+    settings.floating = [...(settings.floating || []), svc.id];
+    persistSettings();
+  }
   if (win && !win.isDestroyed()) win.webContents.send('bubbly:detached', svc.id);
   return w;
 }
@@ -429,13 +568,37 @@ function resizeBubble(sender, mode) {
 // ---------------------------------------------------------------------------
 // Settings mutation + side effects
 // ---------------------------------------------------------------------------
+// What the renderers see: stored settings plus runtime status.
+const publicSettings = () => ({ ...settings, hotkeyOk });
+
+// (Re)bind the global show/hide shortcut. Returns false if it's unusable or
+// another app already owns it.
+function bindHotkey(acc) {
+  if (!isValidAccelerator(acc)) return false;
+  try { return globalShortcut.register(acc, toggleVisibility); } catch { return false; }
+}
+
 function applySettings(patch) {
   const prev = { ...settings };
-  settings = { ...settings, ...patch };
+  const { hotkeyOk: _ignored, ...clean } = patch || {};
+  settings = normalizeLayout({ ...settings, ...clean });
+
+  if (prev.hotkey !== settings.hotkey) {
+    if (hotkeyOk) globalShortcut.unregister(prev.hotkey);
+    if (bindHotkey(settings.hotkey)) {
+      hotkeyOk = true;
+    } else {
+      // keep the old shortcut working rather than leaving none
+      settings.hotkey = prev.hotkey;
+      hotkeyOk = bindHotkey(prev.hotkey);
+    }
+  }
   persistSettings();
 
   const geometryChanged =
     prev.edge !== settings.edge ||
+    prev.orientation !== settings.orientation ||
+    prev.railCX !== settings.railCX ||
     prev.panelWidth !== settings.panelWidth ||
     prev.panelHeight !== settings.panelHeight ||
     prev.railY !== settings.railY;
@@ -445,17 +608,17 @@ function applySettings(patch) {
     app.setLoginItemSettings({ openAtLogin: settings.launchAtStartup });
   }
   updateTray();
-  if (win) win.webContents.send('bubbly:settings-changed', settings);
+  if (win) win.webContents.send('bubbly:settings-changed', publicSettings());
 
   // Reload chats so the passkey patch applies (or stops applying) immediately.
   if (prev.blockPasskeys !== settings.blockPasskeys) reloadAllWebviews();
-  return settings;
+  return publicSettings();
 }
 
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
-ipcMain.handle('settings:get', () => settings);
+ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('settings:save', (e, patch) => applySettings(patch));
 
 ipcMain.handle('panel:set-expanded', (e, value) => {
@@ -471,11 +634,18 @@ ipcMain.handle('mode:set', (e, m) => {
 });
 
 ipcMain.on('rail:size', (e, size) => {
-  railSize = { w: RAIL_W, h: Math.max(140, size.h) };
+  railSize = { w: Math.max(140, size.w || 0), h: Math.max(140, size.h || 0) };
   if (!expanded && win.isVisible()) animateTo(targetBounds(), 120);
 });
 
 ipcMain.on('window:hide', () => { if (win) win.hide(); });
+
+// e.g. a chat notification was clicked: bring the rail out and focus it.
+ipcMain.on('window:show', () => {
+  if (!win) return;
+  if (!win.isVisible() || mode === 'peek') reveal('manual');
+  win.focus();
+});
 
 ipcMain.on('unread:update', (e, { total, increased }) => {
   lastUnread = total;
@@ -489,28 +659,38 @@ ipcMain.on('open-external', (e, url) => {
   if (/^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 
-ipcMain.handle('bubble-menu', (e, { id, name, muted }) => {
-  const isDetached = detached.has(id) && !detached.get(id).isDestroyed();
+// Context menu built by the renderer: items are { label, value } or
+// { type: 'separator' }; resolves with the picked value (or null).
+ipcMain.handle('menu:popup', (e, items) => {
+  const host = BrowserWindow.fromWebContents(e.sender) || win;
   return new Promise((resolve) => {
     let done = false;
-    const pick = (v) => () => { done = true; resolve(v); };
-    const menu = Menu.buildFromTemplate([
-      { label: `Open ${name}`, click: pick('open') },
-      isDetached
-        ? { label: 'Show floating bubble', click: pick('focus-detached') }
-        : { label: 'Pop out as floating bubble', click: pick('detach') },
-      { label: 'Reload', click: pick('reload') },
-      { label: muted ? 'Unmute notifications' : 'Mute notifications', click: pick('mute') },
-      { label: 'Open in browser', click: pick('external') },
-      { type: 'separator' },
-      { label: 'Remove service', click: pick('remove') }
-    ]);
-    menu.popup({ window: win });
+    const template = (items || []).map((it) => (it.type === 'separator'
+      ? { type: 'separator' }
+      : { label: String(it.label), enabled: it.enabled !== false, click: () => { done = true; resolve(it.value); } }));
+    const menu = Menu.buildFromTemplate(template);
+    menu.popup({ window: host });
     menu.on('menu-will-close', () => setTimeout(() => { if (!done) resolve(null); }, 50));
   });
 });
 
-ipcMain.handle('service:detach', (e, svc) => { createBubbleWindow(svc); return true; });
+// Point a floating bubble at another page of its service (e.g. a pinned chat).
+ipcMain.handle('service:navigate-detached', (e, { id, url }) => {
+  const w = detached.get(id);
+  if (!w || w.isDestroyed() || !/^https?:\/\//i.test(url || '')) return false;
+  w.webContents.send('bubble:navigate', url);
+  w.show();
+  w.focus();
+  return true;
+});
+
+// Pop a service ("<svc id>") or a pinned chat ("<svc id>~<chat id>") out as a floating bubble.
+ipcMain.handle('service:detach', (e, id) => {
+  const t = floatTarget(id);
+  if (!t) return false;
+  createBubbleWindow(t);
+  return true;
+});
 
 ipcMain.handle('service:focus-detached', (e, id) => {
   const w = detached.get(id);
@@ -522,7 +702,20 @@ ipcMain.handle('service:focus-detached', (e, id) => {
   return false;
 });
 
-ipcMain.handle('service:list-detached', () => [...detached.keys()]);
+ipcMain.handle('service:close-detached', (e, id) => {
+  const w = detached.get(id);
+  if (w && !w.isDestroyed()) w.close();
+  if (settings.bubblePos && settings.bubblePos[id]) {
+    const { [id]: _gone, ...rest } = settings.bubblePos;
+    settings.bubblePos = rest;
+    persistSettings();
+  }
+  return true;
+});
+
+// [{ id, count }] — the count lets the rail badge bubbles restored before it loaded.
+ipcMain.handle('service:list-detached', () =>
+  [...detached.keys()].map((id) => ({ id, count: detachedUnread.get(id) || 0 })));
 
 // From a floating bubble window
 ipcMain.on('bubble:resize', (e, mode) => resizeBubble(e.sender, mode));
@@ -530,6 +723,24 @@ ipcMain.on('bubble:close', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w && !w.isDestroyed()) w.close();
 });
+// A floating bubble reports its unread count so the rail badge + tray total stay right.
+ipcMain.on('bubble:unread', (e, { id, count, increased }) => {
+  detachedUnread.set(id, count);
+  if (win && !win.isDestroyed()) win.webContents.send('bubbly:detached-unread', { id, count, increased });
+});
+
+// Remember a service's zoom level (set with Ctrl +/-/0 in the rail or a bubble).
+ipcMain.handle('service:set-zoom', (e, { id, zoom }) => {
+  const services = settings.services.map((s) => (s.id === id ? { ...s, zoom } : s));
+  applySettings({ services });
+  return true;
+});
+
+ipcMain.on('bubble:focus', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (w && !w.isDestroyed()) { w.show(); w.focus(); }
+});
+
 ipcMain.on('bubble:reveal', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w && !w.isDestroyed()) {
@@ -541,10 +752,37 @@ ipcMain.on('bubble:reveal', (e) => {
 // ---------------------------------------------------------------------------
 // Webview hardening + login-popup handling
 // ---------------------------------------------------------------------------
+const ZOOM_KEYS = new Set(['=', '+', '-', '_', '0']);
+const hardenedSessions = new WeakSet();
+
 const AUTH_HINTS = /accounts\.google|appleid\.apple|login\.live|login\.microsoft|facebook\.com\/(login|dialog|oauth)|oauth|signin|sign-in|auth|sso/i;
 
 app.on('web-contents-created', (event, contents) => {
+  // Our own windows host <webview>s: make sure every one is locked down, no matter
+  // what attributes end up on the tag, and only ever loads http(s) pages.
+  if (contents.getType() === 'window') {
+    contents.on('will-attach-webview', (e, webPreferences, params) => {
+      // only our own tiny, sandboxed preload (relays notification clicks)
+      webPreferences.preload = path.join(__dirname, 'webview-preload.js');
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      if (!/^https?:\/\//i.test(params.src || '')) e.preventDefault();
+    });
+    return;
+  }
   if (contents.getType() !== 'webview') return;
+
+  // Ctrl +/-/0 typed inside a chat: the keystroke goes to the page, not to our UI,
+  // so catch it here and let the host window zoom (and remember) that service.
+  contents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    if (!ZOOM_KEYS.has(input.key)) return;
+    e.preventDefault();
+    const host = contents.hostWebContents;
+    if (host && !host.isDestroyed()) host.send('bubbly:zoom-key', input.key);
+  });
 
   contents.setWindowOpenHandler(({ url }) => {
     if (AUTH_HINTS.test(url)) {
@@ -562,9 +800,13 @@ app.on('web-contents-created', (event, contents) => {
     return { action: 'deny' };
   });
 
-  contents.session.setPermissionRequestHandler((wc, permission, cb) => {
-    cb(['notifications', 'media', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock'].includes(permission));
-  });
+  // One handler per session (each service has its own persist:<id> partition).
+  if (!hardenedSessions.has(contents.session)) {
+    hardenedSessions.add(contents.session);
+    contents.session.setPermissionRequestHandler((wc, permission, cb) => {
+      cb(['notifications', 'media', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock'].includes(permission));
+    });
+  }
 
   // Neutralize WebAuthn as early as each document is ready (and after SPA
   // navigations), so no Windows passkey dialog can pop while blocking is on.
@@ -575,6 +817,11 @@ app.on('web-contents-created', (event, contents) => {
   contents.on('dom-ready', injectPasskeyPatch);
   contents.on('did-navigate', injectPasskeyPatch);
   contents.on('did-navigate-in-page', injectPasskeyPatch);
+
+  // Notification-click hook (only chat views have the relay preload).
+  if (contents.hostWebContents) {
+    contents.on('dom-ready', () => contents.executeJavaScript(NOTIFY_PATCH, true).catch(() => {}));
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -589,10 +836,26 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    // Bring back bubbles that were floating when Bubbly last quit. Created before
+    // the rail so its first listDetached() already knows about them.
+    const restore = (settings.floating || []).map(floatTarget).filter(Boolean);
+    settings.floating = [];
+    for (const t of restore) createBubbleWindow(t);
+
+    hotkeyOk = bindHotkey(settings.hotkey);
     createWindow();
     createTray();
 
-    globalShortcut.register('Control+Shift+B', toggleVisibility);
+    if (!hotkeyOk) {
+      const hk = displayAccelerator(settings.hotkey);
+      console.warn(`${hk} is taken by another app — use the tray icon to show Bubbly.`);
+      if (process.platform === 'win32') {
+        tray.displayBalloon({
+          title: 'Bubbly shortcut unavailable',
+          content: `${hk} is used by another app. Pick a new show/hide shortcut in Bubbly's Settings.`
+        });
+      }
+    }
 
     screen.on('display-metrics-changed', () => animateTo(targetBounds(), 0));
     screen.on('work-area-size-changed', () => animateTo(targetBounds(), 0));

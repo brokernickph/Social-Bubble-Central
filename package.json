@@ -5,9 +5,11 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test",
     "icon": "node tools/make-icon.js",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "logos": "node tools/make-logos.js"
   },
   "keywords": ["messenger", "chat", "dock", "electron"],
   "author": "SPEEED",
@@ -15,7 +17,8 @@
   "type": "commonjs",
   "devDependencies": {
     "electron": "^43.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "simple-icons": "16.38.1"
   },
   "build": {
     "appId": "com.speeed.bubbly",
@@ -29,6 +32,7 @@
       "main.js",
       "preload.js",
       "bubble-preload.js",
+      "webview-preload.js",
       "renderer/**/*",
       "!tools/**/*",
       "!dist/**/*"

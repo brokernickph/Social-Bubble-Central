@@ -48,7 +48,8 @@ const CATALOG = [
     name: 'WhatsApp',
     url: 'https://web.whatsapp.com/',
     domain: 'whatsapp.com',
-    color: '#25D366'
+    color: '#25D366',
+    noChatLinks: true            // one address for every chat → can't pin chats
   },
   {
     type: 'telegram',
@@ -104,7 +105,8 @@ const CATALOG = [
     name: 'Snapchat',
     url: 'https://web.snapchat.com/',
     domain: 'snapchat.com',
-    color: '#FFFC00'
+    color: '#FFFC00',
+    noChatLinks: true
   },
   {
     type: 'steam',
@@ -114,6 +116,37 @@ const CATALOG = [
     color: '#66C0F4'
   }
 ];
+
+// Unread count from a page title. Chat apps put it first ("(3) Discord") or
+// last ("Inbox (3)"); a number elsewhere ("Notes (2024) draft") isn't a count.
+function titleUnread(title) {
+  const t = String(title || '');
+  const m = t.match(/^\s*\((\d{1,4})\+?\)/) || t.match(/\((\d{1,3})\+?\)\s*$/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+// Suggested name for a pinned chat, from the page title. Titles look like
+// "(2) Sam | Messenger", "Priya - Telegram" or "Messenger"; drop the unread
+// count and any part that's just the service's name.
+function chatNameFromTitle(title, serviceNames = []) {
+  const skip = new Set(serviceNames.filter(Boolean).map((n) => n.toLowerCase()));
+  const parts = String(title || '')
+    .replace(/^\s*\(\d+\+?\)\s*/, '')
+    .split(/\s+[|•·–—-]\s+/)
+    .map((p) => p.trim())
+    .filter((p) => p && !skip.has(p.toLowerCase()));
+  return (parts[0] || '').slice(0, 40);
+}
+
+// Can this page address be pinned as its own chat? It must be a real page of
+// the service other than the service's start page.
+function isPinnableChatUrl(url, svc) {
+  let u, home;
+  try { u = new URL(url); home = new URL(svc.url); } catch { return false; }
+  if (!/^https?:$/.test(u.protocol)) return false;
+  const norm = (x) => (x.origin + x.pathname).replace(/\/+$/, '') + x.search + x.hash;
+  return norm(u) !== norm(home);
+}
 
 function catalogByType(type) {
   return CATALOG.find((c) => c.type === type) || null;
@@ -125,11 +158,22 @@ function catalogTweaks(type) {
   return c ? { css: c.css || '', zoom: c.zoom || 1 } : { css: '', zoom: 1 };
 }
 
-// Apply the tweaks to a live <webview> (call on dom-ready).
-function applyTweaks(wv, type) {
-  const { css, zoom } = catalogTweaks(type);
-  try { if (zoom !== 1) wv.setZoomFactor(zoom); } catch { /* not ready */ }
+// Apply the tweaks to a live <webview> (call on dom-ready). A zoom the user
+// picked for this service (svc.zoom, a zoom factor) wins over the catalog default.
+function applyTweaks(wv, svcOrType) {
+  const svc = typeof svcOrType === 'string' ? { type: svcOrType } : svcOrType;
+  const { css, zoom } = catalogTweaks(svc.type);
+  const z = Number.isFinite(svc.zoom) ? svc.zoom : zoom;
+  try { if (z !== 1) wv.setZoomFactor(z); } catch { /* not ready */ }
   try { if (css) wv.insertCSS(css); } catch { /* not ready */ }
 }
 
-if (typeof module !== 'undefined') module.exports = { CATALOG, catalogByType, catalogTweaks };
+// Ctrl +/-/0 → next zoom factor. "0" resets to the service's catalog default
+// (e.g. Discord's 0.8 fit), not to 100%.
+function nextZoom(current, key, type) {
+  if (key === '0') return catalogTweaks(type).zoom;
+  const step = (key === '-' || key === '_') ? -0.1 : 0.1;
+  return Math.round(Math.min(3, Math.max(0.3, current + step)) * 100) / 100;
+}
+
+if (typeof module !== 'undefined') module.exports = { CATALOG, catalogByType, catalogTweaks, nextZoom, titleUnread, chatNameFromTitle, isPinnableChatUrl };
