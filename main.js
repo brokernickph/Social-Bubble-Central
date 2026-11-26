@@ -29,7 +29,9 @@ const DEFAULTS = {
   panelHeight: 720,
   blockPasskeys: true,        // suppress WebAuthn / Windows Hello passkey pop-ups
   onboarded: false,
-  services: []                // { id, type, name, url, color, muted }
+  services: [],               // { id, type, name, url, color, muted, zoom }
+  floating: [],               // service ids popped out as floating bubbles (restored on launch)
+  bubblePos: {}               // service id -> { x, y } last position of its floating bubble
 };
 
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
@@ -133,6 +135,7 @@ let programmaticMove = false;
 let animTimer = null;
 let moveDebounce = null;
 const detached = new Map();           // service id -> its standalone BrowserWindow
+const detachedUnread = new Map();     // service id -> last unread count its bubble reported
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -362,9 +365,18 @@ function createBubbleWindow(svc) {
     return existing;
   }
 
-  const wa = screen.getPrimaryDisplay().workArea;
-  const startX = clamp(wa.x + wa.width - BUBBLE_W - 120, wa.x + 20, wa.x + wa.width - BUBBLE_W - 20);
-  const startY = clamp(wa.y + 100, wa.y + 20, wa.y + wa.height - BUBBLE_H - 20);
+  // Reopen where the user last left it (if that spot is still on a screen).
+  const saved = settings.bubblePos && settings.bubblePos[svc.id];
+  let wa = screen.getPrimaryDisplay().workArea;
+  let startX = wa.x + wa.width - BUBBLE_W - 120;
+  let startY = wa.y + 100;
+  if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+    wa = screen.getDisplayNearestPoint({ x: saved.x, y: saved.y }).workArea;
+    startX = saved.x;
+    startY = saved.y;
+  }
+  startX = clamp(startX, wa.x, wa.x + wa.width - BUBBLE_W);
+  startY = clamp(startY, wa.y, wa.y + wa.height - BUBBLE_H);
 
   const w = new BrowserWindow({
     width: BUBBLE_W,
@@ -395,12 +407,38 @@ function createBubbleWindow(svc) {
     query: { svc: JSON.stringify(svc) }
   });
   w.once('ready-to-show', () => w.showInactive());
+
+  let posTimer = null;
+  w.on('move', () => {
+    clearTimeout(posTimer);
+    posTimer = setTimeout(() => {
+      if (w.isDestroyed()) return;
+      const b = w.getBounds();
+      settings.bubblePos = { ...settings.bubblePos, [svc.id]: { x: b.x, y: b.y } };
+      persistSettings();
+    }, 400);
+  });
+
   w.on('closed', () => {
+    clearTimeout(posTimer);
     detached.delete(svc.id);
-    if (win && !win.isDestroyed()) win.webContents.send('bubbly:reattached', svc.id);
+    detachedUnread.delete(svc.id);
+    // Quitting closes every bubble — keep them listed so they come back next launch.
+    if (!quitting) {
+      settings.floating = (settings.floating || []).filter((id) => id !== svc.id);
+      persistSettings();
+    }
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('bubbly:detached-unread', { id: svc.id, count: 0 });
+      win.webContents.send('bubbly:reattached', svc.id);
+    }
   });
 
   detached.set(svc.id, w);
+  if (!(settings.floating || []).includes(svc.id)) {
+    settings.floating = [...(settings.floating || []), svc.id];
+    persistSettings();
+  }
   if (win && !win.isDestroyed()) win.webContents.send('bubbly:detached', svc.id);
   return w;
 }
@@ -522,7 +560,20 @@ ipcMain.handle('service:focus-detached', (e, id) => {
   return false;
 });
 
-ipcMain.handle('service:list-detached', () => [...detached.keys()]);
+ipcMain.handle('service:close-detached', (e, id) => {
+  const w = detached.get(id);
+  if (w && !w.isDestroyed()) w.close();
+  if (settings.bubblePos && settings.bubblePos[id]) {
+    const { [id]: _gone, ...rest } = settings.bubblePos;
+    settings.bubblePos = rest;
+    persistSettings();
+  }
+  return true;
+});
+
+// [{ id, count }] — the count lets the rail badge bubbles restored before it loaded.
+ipcMain.handle('service:list-detached', () =>
+  [...detached.keys()].map((id) => ({ id, count: detachedUnread.get(id) || 0 })));
 
 // From a floating bubble window
 ipcMain.on('bubble:resize', (e, mode) => resizeBubble(e.sender, mode));
@@ -530,6 +581,19 @@ ipcMain.on('bubble:close', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w && !w.isDestroyed()) w.close();
 });
+// A floating bubble reports its unread count so the rail badge + tray total stay right.
+ipcMain.on('bubble:unread', (e, { id, count, increased }) => {
+  detachedUnread.set(id, count);
+  if (win && !win.isDestroyed()) win.webContents.send('bubbly:detached-unread', { id, count, increased });
+});
+
+// Remember a service's zoom level (set with Ctrl +/-/0 in the rail or a bubble).
+ipcMain.handle('service:set-zoom', (e, { id, zoom }) => {
+  const services = settings.services.map((s) => (s.id === id ? { ...s, zoom } : s));
+  applySettings({ services });
+  return true;
+});
+
 ipcMain.on('bubble:reveal', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);
   if (w && !w.isDestroyed()) {
@@ -541,10 +605,36 @@ ipcMain.on('bubble:reveal', (e) => {
 // ---------------------------------------------------------------------------
 // Webview hardening + login-popup handling
 // ---------------------------------------------------------------------------
+const ZOOM_KEYS = new Set(['=', '+', '-', '_', '0']);
+const hardenedSessions = new WeakSet();
+
 const AUTH_HINTS = /accounts\.google|appleid\.apple|login\.live|login\.microsoft|facebook\.com\/(login|dialog|oauth)|oauth|signin|sign-in|auth|sso/i;
 
 app.on('web-contents-created', (event, contents) => {
+  // Our own windows host <webview>s: make sure every one is locked down, no matter
+  // what attributes end up on the tag, and only ever loads http(s) pages.
+  if (contents.getType() === 'window') {
+    contents.on('will-attach-webview', (e, webPreferences, params) => {
+      delete webPreferences.preload;
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      if (!/^https?:\/\//i.test(params.src || '')) e.preventDefault();
+    });
+    return;
+  }
   if (contents.getType() !== 'webview') return;
+
+  // Ctrl +/-/0 typed inside a chat: the keystroke goes to the page, not to our UI,
+  // so catch it here and let the host window zoom (and remember) that service.
+  contents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    if (!ZOOM_KEYS.has(input.key)) return;
+    e.preventDefault();
+    const host = contents.hostWebContents;
+    if (host && !host.isDestroyed()) host.send('bubbly:zoom-key', input.key);
+  });
 
   contents.setWindowOpenHandler(({ url }) => {
     if (AUTH_HINTS.test(url)) {
@@ -562,9 +652,13 @@ app.on('web-contents-created', (event, contents) => {
     return { action: 'deny' };
   });
 
-  contents.session.setPermissionRequestHandler((wc, permission, cb) => {
-    cb(['notifications', 'media', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock'].includes(permission));
-  });
+  // One handler per session (each service has its own persist:<id> partition).
+  if (!hardenedSessions.has(contents.session)) {
+    hardenedSessions.add(contents.session);
+    contents.session.setPermissionRequestHandler((wc, permission, cb) => {
+      cb(['notifications', 'media', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock'].includes(permission));
+    });
+  }
 
   // Neutralize WebAuthn as early as each document is ready (and after SPA
   // navigations), so no Windows passkey dialog can pop while blocking is on.
@@ -589,10 +683,19 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    // Bring back bubbles that were floating when Bubbly last quit. Created before
+    // the rail so its first listDetached() already knows about them.
+    const ids = new Set(settings.services.map((s) => s.id));
+    const restore = (settings.floating || []).filter((id) => ids.has(id));
+    settings.floating = [];
+    for (const id of restore) createBubbleWindow(settings.services.find((s) => s.id === id));
+
     createWindow();
     createTray();
 
-    globalShortcut.register('Control+Shift+B', toggleVisibility);
+    if (!globalShortcut.register('Control+Shift+B', toggleVisibility)) {
+      console.warn('Ctrl+Shift+B is taken by another app — use the tray icon to show Bubbly.');
+    }
 
     screen.on('display-metrics-changed', () => animateTo(targetBounds(), 0));
     screen.on('work-area-size-changed', () => animateTo(targetBounds(), 0));

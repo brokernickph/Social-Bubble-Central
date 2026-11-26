@@ -6,7 +6,7 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 
 - **Edge rail** — a slim, always-on-top dock of service bubbles that hugs its content (no dead zone along the edge). Click a bubble to expand the chat panel; press `Esc` or click elsewhere to collapse it back.
 - **Movable** — drag the rail by its grip (or any gap between bubbles, or the panel header) and drop it anywhere; it snaps to the nearest screen edge, left or right, and remembers its vertical spot.
-- **Floating chat-head bubbles** — pop any chat out of the panel into a floating, always-on-top bubble you can drag anywhere and use independently (the ⧉ button in the panel header, or right-click a bubble → "Pop out as floating bubble"). It opens as a compact chat panel with its own header, and collapses to a 76px draggable head (Messenger-style) — click the head to reopen. It shares the same login session, shows an unread badge, and pulses when a new message arrives while collapsed. The rail bubble gets a cyan badge while it's floating; click it to bring the bubble forward, and closing the bubble returns the chat to the panel.
+- **Floating chat-head bubbles** — pop any chat out of the panel into a floating, always-on-top bubble you can drag anywhere and use independently (the ⧉ button in the panel header, or right-click a bubble → "Pop out as floating bubble"). It opens as a compact chat panel with its own header, and collapses to a 76px draggable head (Messenger-style) — click the head to reopen. It shares the same login session, shows an unread badge, and pulses when a new message arrives while collapsed. The rail bubble gets a cyan badge while it's floating; click it to bring the bubble forward, and closing the bubble returns the chat to the panel. Floating bubbles remember where you left them, come back when you relaunch Bubbly, and their unread counts still show on the rail bubble and in the tray total.
 - **Narrow-layout fixes** — desktop web apps like Discord assume a wide window, so Bubbly injects per-service CSS + zoom (see `catalogTweaks` in [catalog.js](renderer/catalog.js)) to make them usable in a narrow panel/bubble. For Discord it hides the server-icon rail and member list and zooms to 0.8, so the message column actually has room. You can also widen the docked panel (Settings → Dock → Panel width, up to 960px).
 - **Slide-away idle** — when you're not interacting, the whole rail slides into the screen edge leaving a 12px sliver with a glow strip (violet, or red when there are unreads). Hover the sliver and it glides back out.
 - **Ghost mode** — Bubbly hides completely and slides back in when a new message arrives. Bring it back anytime with `Ctrl+Shift+B` or the tray icon. Toggle from the rail (ghost button), the tray menu, or Settings.
@@ -24,7 +24,7 @@ An edge-docked, always-on-top messenger hub for Windows. All your chats — Inst
 | --- | --- |
 | `Ctrl+Shift+B` | Show / hide Bubbly (global) |
 | `Esc` | Collapse the panel |
-| `Ctrl` `+` / `-` / `0` | Zoom the active service |
+| `Ctrl` `+` / `-` / `0` | Zoom the active service (works while typing in a chat; remembered per service; `0` resets to the service's default fit) |
 
 ## Run (development)
 

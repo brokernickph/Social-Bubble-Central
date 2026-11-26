@@ -1,6 +1,6 @@
 'use strict';
 
-/* global CATALOG, catalogByType */
+/* global CATALOG, catalogByType, applyTweaks, nextZoom */
 
 // ---------------------------------------------------------------------------
 // State
@@ -156,7 +156,9 @@ async function detachService(id) {
   const svc = getSvc(id);
   if (!svc || detachedIds.has(id)) { if (svc) window.bubbly.focusDetached(id); return; }
   detachedIds.add(id);
+  const keep = unread.get(id) || 0;   // the bubble reports its own count from here on
   destroyWebview(id);                 // stop the in-panel copy so it isn't running twice
+  unread.set(id, keep);
   await window.bubbly.detachService(svc);
   toast(`${svc.name} popped out as a floating bubble`);
 
@@ -227,7 +229,7 @@ function ensureWebview(svc) {
   });
 
   // Inject per-service layout fixes (e.g. make Discord usable when narrow).
-  wv.addEventListener('dom-ready', () => applyTweaks(wv, svc.type));
+  wv.addEventListener('dom-ready', () => applyTweaks(wv, getSvc(svc.id) || svc));
 
   wv.addEventListener('did-fail-load', (e) => {
     if (e.errorCode !== -3 && e.isMainFrame) {
@@ -282,7 +284,20 @@ function recomputeUnread(id) {
   setUnread(id, p >= 0 ? Math.max(p, t) : t);
 }
 
-function setUnread(id, count) {
+function unreadTotal() {
+  return settings.services.reduce((sum, s) => sum + (s.muted ? 0 : (unread.get(s.id) || 0)), 0);
+}
+
+// Tell main (tray + ghost reveal) and the rail glow about the current total.
+function pushTotal(increased = false) {
+  const total = unreadTotal();
+  document.body.classList.toggle('has-unread', total > 0);
+  window.bubbly.updateUnread({ total, increased });
+}
+
+// opts.increased overrides the settle heuristic (used for floating bubbles,
+// which run their own settle window).
+function setUnread(id, count, opts = {}) {
   const svc = getSvc(id);
   if (!svc) return;
   count = Math.max(0, count | 0);
@@ -291,17 +306,28 @@ function setUnread(id, count) {
   unread.set(id, count);
   updateBadge(id);
 
-  const total = settings.services.reduce(
-    (sum, s) => sum + (s.muted ? 0 : (unread.get(s.id) || 0)), 0);
-  document.body.classList.toggle('has-unread', total > 0);
   const settled = Date.now() - (baseline.get(id) || 0) > 15000;
-  const increased = count > prev && !svc.muted && settled;
+  const increased = !svc.muted && (opts.increased ?? (count > prev && settled));
 
   if (increased) {
     const b = bubblesEl.querySelector(`[data-id="${id}"]`);
     if (b) { b.classList.remove('pulse'); void b.offsetWidth; b.classList.add('pulse'); }
   }
-  window.bubbly.updateUnread({ total, increased });
+  pushTotal(increased);
+}
+
+// Zoom the given service's webview and remember the level.
+function zoomService(id, key) {
+  const svc = getSvc(id);
+  const wv = webviews.get(id);
+  if (!svc || !wv) return;
+  try {
+    const z = nextZoom(wv.getZoomFactor(), key, svc.type);
+    wv.setZoomFactor(z);
+    svc.zoom = z;
+    window.bubbly.setZoom(id, z);
+    toast(`${svc.name} zoom ${Math.round(z * 100)}%`);
+  } catch { /* not ready */ }
 }
 
 function updateBadge(id) {
@@ -397,6 +423,7 @@ async function bubbleMenu(svc) {
       svc.muted = !svc.muted;
       await window.bubbly.saveSettings({ services: settings.services });
       renderBubbles();
+      pushTotal();
       toast(svc.muted ? `${svc.name} muted` : `${svc.name} unmuted`);
       break;
     case 'external': {
@@ -416,6 +443,10 @@ function removeService(id) {
   const svc = getSvc(id);
   if (!svc) return;
   destroyWebview(id);
+  if (detachedIds.has(id)) {          // also close its floating bubble
+    detachedIds.delete(id);
+    window.bubbly.closeDetached(id);
+  }
   settings.services = settings.services.filter((s) => s.id !== id);
   window.bubbly.saveSettings({ services: settings.services });
   if (activeId === id) {
@@ -426,10 +457,7 @@ function removeService(id) {
   renderBubbles();
   renderSettingsServices();
   toast(`${svc.name} removed`);
-  window.bubbly.updateUnread({
-    total: settings.services.reduce((s, x) => s + (x.muted ? 0 : (unread.get(x.id) || 0)), 0),
-    increased: false
-  });
+  pushTotal();
 }
 
 function addService(entry) {
@@ -572,6 +600,7 @@ function renderSettingsServices() {
       await window.bubbly.saveSettings({ services: settings.services });
       renderBubbles();
       renderSettingsServices();
+      pushTotal();
     });
     row.appendChild(mute);
 
@@ -687,15 +716,10 @@ function wireChrome() {
       if (currentView === 'settings' || currentView === 'add') backToService();
       else setExpanded(false);
     }
-    // zoom the active webview
-    if (e.ctrlKey && activeId) {
-      const wv = webviews.get(activeId);
-      if (!wv) return;
-      try {
-        if (e.key === '=' || e.key === '+') wv.setZoomLevel(wv.getZoomLevel() + 0.5);
-        if (e.key === '-') wv.setZoomLevel(wv.getZoomLevel() - 0.5);
-        if (e.key === '0') wv.setZoomLevel(0);
-      } catch { /* not ready */ }
+    // zoom the active webview (keys typed inside the chat arrive via onZoomKey)
+    if (e.ctrlKey && activeId && currentView === 'service' && ['=', '+', '-', '_', '0'].includes(e.key)) {
+      e.preventDefault();
+      zoomService(activeId, e.key);
     }
   });
 
@@ -762,12 +786,26 @@ window.bubbly.onDetached((id) => {
   renderBubbles();
 });
 
+// A floating bubble's unread count (its webview lives in another window).
+window.bubbly.onDetachedUnread(({ id, count, increased }) => {
+  if (!detachedIds.has(id) && count > 0) return;
+  setUnread(id, count, { increased: !!increased });
+});
+
+// Ctrl +/-/0 pressed inside a chat page in this window.
+window.bubbly.onZoomKey((key) => {
+  if (activeId && currentView === 'service') zoomService(activeId, key);
+});
+
 // Detached window was closed → the service comes back into the panel.
 window.bubbly.onReattached((id) => {
   detachedIds.delete(id);
   renderBubbles();
   const svc = getSvc(id);
-  if (svc) toast(`${svc.name} is back in Bubbly`);
+  if (svc) {
+    ensureWebview(svc);              // keep tracking its unreads from the panel again
+    toast(`${svc.name} is back in Bubbly`);
+  }
 });
 
 window.bubbly.onSettingsChanged((s) => {
@@ -775,7 +813,7 @@ window.bubbly.onSettingsChanged((s) => {
   settings = s;
   applyChrome();
   if (currentView === 'settings') syncSettingsView();
-  if (servicesChanged) renderBubbles();
+  if (servicesChanged) { renderBubbles(); pushTotal(); }
 });
 
 // ---------------------------------------------------------------------------
@@ -783,13 +821,15 @@ window.bubbly.onSettingsChanged((s) => {
 // ---------------------------------------------------------------------------
 (async function init() {
   settings = await window.bubbly.getSettings();
-  for (const id of await window.bubbly.listDetached()) detachedIds.add(id);
+  const floating = await window.bubbly.listDetached();
+  for (const { id } of floating) detachedIds.add(id);
   applyChrome();
   wireChrome();
   buildSettingsView();
   buildAddView();
   buildOnboarding();
   renderBubbles();
+  for (const { id, count } of floating) if (count) setUnread(id, count, { increased: false });
 
   // keep the window height hugging the rail content (no full-edge dead zone)
   const railInner = document.getElementById('rail-inner');

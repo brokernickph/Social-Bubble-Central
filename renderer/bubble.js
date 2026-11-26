@@ -1,6 +1,6 @@
 'use strict';
 
-/* global catalogByType, applyTweaks */
+/* global catalogByType, applyTweaks, nextZoom */
 
 const svc = JSON.parse(new URLSearchParams(location.search).get('svc') || '{}');
 
@@ -57,7 +57,17 @@ wv.setAttribute('webpreferences', 'backgroundThrottling=false,contextIsolation=t
 wv.src = svc.url;
 document.getElementById('host').appendChild(wv);
 
-wv.addEventListener('dom-ready', () => applyTweaks(wv, svc.type));
+wv.addEventListener('dom-ready', () => applyTweaks(wv, svc));
+
+// Ctrl +/-/0 inside the chat → zoom this bubble and remember it for the service.
+window.bubbleApi.onZoomKey((key) => {
+  try {
+    const z = nextZoom(wv.getZoomFactor(), key, svc.type);
+    wv.setZoomFactor(z);
+    svc.zoom = z;
+    window.bubbleApi.setZoom(svc.id, z);
+  } catch { /* not ready */ }
+});
 
 // ---------------------------------------------------------------------------
 // Collapse / expand
@@ -112,6 +122,7 @@ function setUnread(n) {
   unread = n;
   updateBadge();
   const settled = Date.now() - bornAt > 12000;
+  if (n !== prev) window.bubbleApi.reportUnread({ id: svc.id, count: n, increased: n > prev && settled });
   if (collapsed && n > prev && settled) {
     const head = document.getElementById('head');
     head.classList.remove('pulse'); void head.offsetWidth; head.classList.add('pulse');

@@ -125,11 +125,22 @@ function catalogTweaks(type) {
   return c ? { css: c.css || '', zoom: c.zoom || 1 } : { css: '', zoom: 1 };
 }
 
-// Apply the tweaks to a live <webview> (call on dom-ready).
-function applyTweaks(wv, type) {
-  const { css, zoom } = catalogTweaks(type);
-  try { if (zoom !== 1) wv.setZoomFactor(zoom); } catch { /* not ready */ }
+// Apply the tweaks to a live <webview> (call on dom-ready). A zoom the user
+// picked for this service (svc.zoom, a zoom factor) wins over the catalog default.
+function applyTweaks(wv, svcOrType) {
+  const svc = typeof svcOrType === 'string' ? { type: svcOrType } : svcOrType;
+  const { css, zoom } = catalogTweaks(svc.type);
+  const z = Number.isFinite(svc.zoom) ? svc.zoom : zoom;
+  try { if (z !== 1) wv.setZoomFactor(z); } catch { /* not ready */ }
   try { if (css) wv.insertCSS(css); } catch { /* not ready */ }
 }
 
-if (typeof module !== 'undefined') module.exports = { CATALOG, catalogByType, catalogTweaks };
+// Ctrl +/-/0 → next zoom factor. "0" resets to the service's catalog default
+// (e.g. Discord's 0.8 fit), not to 100%.
+function nextZoom(current, key, type) {
+  if (key === '0') return catalogTweaks(type).zoom;
+  const step = (key === '-' || key === '_') ? -0.1 : 0.1;
+  return Math.round(Math.min(3, Math.max(0.3, current + step)) * 100) / 100;
+}
+
+if (typeof module !== 'undefined') module.exports = { CATALOG, catalogByType, catalogTweaks, nextZoom };
