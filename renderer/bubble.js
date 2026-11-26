@@ -79,6 +79,7 @@ function setCollapsed(v) {
   document.body.classList.toggle('collapsed', v);
   window.bubbleApi.resize(v ? 'collapsed' : 'expanded');
   if (!v) { clearPulse(); markSeen(); }
+  else updateBadge();                 // show the current unread count on the head right away
 }
 
 document.getElementById('btn-min').addEventListener('click', () => setCollapsed(true));

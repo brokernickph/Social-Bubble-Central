@@ -188,6 +188,7 @@ function updateHeader() {
       const img = document.createElement('img');
       img.src = url;
       img.alt = '';
+      img.addEventListener('error', () => img.remove());   // offline / no favicon: no broken-image icon
       panelIcon.appendChild(img);
     }
   } else {
@@ -869,12 +870,19 @@ window.bubbly.onSettingsChanged((s) => {
   renderBubbles();
   for (const { id, count } of floating) if (count) setUnread(id, count, { increased: false });
 
-  // keep the window height hugging the rail content (no full-edge dead zone)
+  // Keep the window height hugging the rail content (no full-edge dead zone).
+  // The rail is capped at the window height, so measure the *natural* height:
+  // include whatever the bubble list currently hides by scrolling. Otherwise a
+  // rail with 3+ services stays stuck at the initial 320px window and clips.
   const railInner = document.getElementById('rail-inner');
-  new ResizeObserver(() => {
+  const measureRail = () => {
     const r = railInner.getBoundingClientRect();
-    window.bubbly.setRailSize({ h: Math.ceil(r.height) + 12 });
-  }).observe(railInner);
+    const hidden = Math.max(0, bubblesEl.scrollHeight - bubblesEl.clientHeight);
+    window.bubbly.setRailSize({ h: Math.ceil(r.height + hidden) + 12 });
+  };
+  new ResizeObserver(measureRail).observe(railInner);
+  new MutationObserver(measureRail).observe(bubblesEl, { childList: true });
+  measureRail();
 
   if (settings.hotkeyOk === false) {
     toast(`${displayAccelerator(settings.hotkey)} is taken by another app — pick a new shortcut in Settings`);
